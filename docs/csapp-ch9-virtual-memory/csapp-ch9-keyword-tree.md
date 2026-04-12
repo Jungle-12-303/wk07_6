@@ -40,12 +40,21 @@
                 - 속도와 공간 효율은 자주 충돌한다.
               - `alignment`
                 - ABI, SIMD, metadata packing, correctness와 연결된다.
-              - `heap block`
-                - `header`
-                - `payload`
-                - `padding`
-                - optional `footer`
-                - heap object는 보통 allocator metadata와 함께 저장된다.
+              - `heap structure`
+                - `prologue block` — 힙 시작 sentinel (항상 allocated, size=header만)
+                - `epilogue block` — 힙 끝 sentinel (size=0, allocated)
+                - 블록들의 연속 배열: allocated + free 혼재
+              - `heap block` [Q21](../questions/q21-header-lower-3bits.md)
+                - `header` (1 word)
+                  - 상위 비트: block size (header + payload + padding 포함)
+                  - `하위 3비트 트릭` — alignment(8B/16B) 덕분에 하위 3비트는 항상 0 → 플래그 활용
+                    - bit 0: allocated (1) / free (0)
+                    - bit 1: prev block allocated (footer 생략 최적화)
+                    - bit 2: reserved
+                - `payload` — 사용자 공간
+                - `padding` — alignment 충족용
+                - optional `footer` (boundary tag) — header 복사, 역방향 coalesce용
+                - `최소 블록 크기` = header + 최소 payload + padding (보통 16B or 32B)
               - `boundary tag`
                 - 인접 free block을 빠르게 합치기 위한 metadata 구조다 [Q22](../questions/q22-split-coalesce.md).
               - `fragmentation`
@@ -54,17 +63,29 @@
                 - `external fragmentation`
                   - 총 free memory는 충분하지만 연속 block이 부족한 상태다 [Q19](../questions/q19-fragmentation.md).
               - `free block organization`
-                - `implicit free list`
-                - `explicit free list`
-                - `segregated free list`
-                - allocator는 free block을 어떻게 찾고 관리할지 선택해야 한다 [Q20](../questions/q20-segregated-free-list.md).
+                - `implicit free list` — 모든 블록(할당+가용) header의 size로 순회, O(전체 블록 수)
+                - `explicit free list` — 가용 블록만 이중 연결 리스트 (payload 영역에 prev/next 포인터)
+                  - 순서: `LIFO` (최근 free를 앞에) 또는 `Address-Ordered`
+                - `segregated free list` — size class별 별도 리스트 (bin) [Q20](../questions/q20-segregated-free-list.md)
+                  - `simple segregated storage` — bin 내 블록 크기 고정, split/coalesce 없음
+                  - `segregated fits` — bin 내 다양한 크기, split/coalesce 있음
+                  - `buddy system` — 2의 거듭제곱 단위로 split/coalesce
               - `placement policy`
                 - `first fit`
                 - `next fit`
                 - `best fit`
                 - 어떤 block을 먼저 고를지가 fragmentation의 모양을 바꾼다 [Q23](../questions/q23-placement-policy.md).
-              - `split / coalesce`
-                - 큰 free block을 나누고, 인접 free block을 다시 합치는 핵심 동작이다 [Q22](../questions/q22-split-coalesce.md).
+              - `split / coalesce` [Q22](../questions/q22-split-coalesce.md)
+                - `split` — 선택된 가용 블록이 요청보다 클 때, 나머지 ≥ 최소 블록이면 분할
+                - `coalesce` — free() 시 인접 가용 블록 합체
+                  - `4가지 케이스:`
+                    - case 1: 앞 할당 + 뒤 할당 → 합체 없음
+                    - case 2: 앞 할당 + 뒤 가용 → 현재+뒤 합체
+                    - case 3: 앞 가용 + 뒤 할당 → 앞+현재 합체
+                    - case 4: 앞 가용 + 뒤 가용 → 앞+현재+뒤 합체
+                  - `immediate coalescing` — free() 즉시 합체
+                  - `deferred coalescing` — 나중에 한꺼번에 (malloc 실패 시 등)
+                  - `boundary tag` (footer) → 이전 블록을 O(1)로 찾기
               - `large allocation path`
                 - 작은 block는 arena 내부 재사용이 유리하고, 큰 block는 별도 mapping이 유리할 수 있다.
               - `thread-aware allocator`
@@ -183,11 +204,20 @@
                   - `address space abstraction`
                     - process마다 독립된 VA 공간을 주는 추상화다.
                   - `why Virtual Memory exists`
-                    - `caching`
+                    - `caching` (§9.3)
                       - DRAM을 disk-backed data의 cache처럼 쓰게 한다.
-                    - `management`
+                      - `DRAM cache 특성` — miss penalty 극도로 큼 (~10ms 디스크 접근)
+                        - 큰 page 크기 (4KB) → miss 횟수 줄이기
+                        - fully associative → page를 아무 frame에 배치
+                        - write-back → dirty page만 디스크에 기록
+                        - SW 기반 처리 (OS 커널) — HW만으로 감당 불가
+                    - `management` (§9.4)
                       - 물리적으로 흩어진 memory를 연속 공간처럼 보이게 한다.
-                    - `protection`
+                      - 링킹 단순화 — 모든 프로그램이 같은 VA 레이아웃
+                      - 로딩 단순화 — execve()가 동일 구조로 매핑
+                      - 공유 단순화 — 여러 VA → 같은 물리 프레임
+                      - 할당 단순화 — 연속 VA, 분산 PA
+                    - `protection` (§9.5)
                       - process/process, user/kernel 접근을 분리한다.
                   - `page state`
                     - `resident` [Q4](../questions/q04-resident-not-resident.md)
@@ -209,25 +239,56 @@
                     - MMU는 빠른 hit 경로와 느린 miss 경로를 함께 가지므로 TLB와 page table로 내려간다.
                     - `TLB` [Q13](../questions/q13-tlb.md)
                       - 최근 translation 결과를 cache한다.
+                      - set-associative cache 구조: `TLBI` (index, set 선택) + `TLBT` (tag, VPN 상위) → `PPN` + permission
+                      - 보통 16~256 entries, 4-way ~ fully associative
+                      - `TLB hit` → 1 cycle 추가로 PPN 반환
+                      - `TLB miss` → page table walk (4-level이면 4회 메모리 접근)
+                      - `TLB flush` → CR3 교체 시 전체 무효화
+                      - `PCID / ASID` → process 식별자를 붙여 flush 최소화
                     - `page table`
                       - VA를 PA로 mapping하는 자료구조다.
                       - `multi-level page table` [Q14](../questions/q14-multi-level-page-table.md)
                         - 안 쓰는 VA 범위의 table을 만들지 않기 위한 구조다.
+                        - 각 레벨 테이블 = 한 페이지(4KB) = 512개 PTE (8B × 512)
+                        - `x86-64 4-Level Paging`
+                          - PML4 (9bit) → PDPT (9bit) → PD (9bit) → PT (9bit) → Offset (12bit) = 48bit VA
+                          - `5-Level Paging (PML5)` → 57bit VA, 최신 서버용
+                        - single-level 문제: 48-bit VA → 2³⁶개 PTE → 테이블만 512GB
                       - `PTE (Page Table Entry)` [Q11](../questions/q11-page-table-pipeline.md)
-                        - `present / valid`
-                        - `PPN`
-                        - `read / write / execute`
-                        - `user / supervisor`
-                        - `dirty`
-                        - `accessed / reference`
+                        - `present / valid` — 물리 메모리에 있는가
+                        - `PPN` — 물리 프레임 번호 (x86-64: 40bit)
+                        - `read / write / execute` — 접근 권한
+                        - `user / supervisor` — 유저 모드 접근 가능 여부
+                        - `dirty (D)` — 쓰기 발생 여부 → write-back 판단
+                        - `accessed / reference (A)` — 접근 여부 → 페이지 교체 알고리즘용
+                        - `PCD` — Page Cache Disable
+                        - `PWT` — Page Write-Through
+                        - PTE 상태 3가지: valid+memory → PPN 변환 / valid+disk → page fault → 로드 / invalid → SIGSEGV
                     - `CR3 / address space switch` [Q12](../questions/q12-cr3-page-sharing.md)
                       - 현재 address space의 최상위 page table 위치를 가리킨다.
                     - `page walk`
                       - TLB miss 시 page table을 따라 mapping을 찾는 과정이다.
+                    - `VA / PA 구조` [Q10](../questions/q10-vpn-offset.md)
+                      - `VA` = VPN + VPO (VPN: 페이지 번호, VPO: 페이지 내 오프셋)
+                      - `PA` = PPN + PPO
+                      - VPO = PPO (페이지 크기가 같으므로)
+                      - 4KB 페이지 → 12-bit offset, VPN = (n - 12) bits
                     - `translation pipeline` [Q11](../questions/q11-page-table-pipeline.md)
-                      - `VA -> TLB -> page walk -> PTE check -> PA`
+                      - ① CPU가 VA 발행 → ② VPN 추출 → ③ TLB 조회
+                      - ④-a TLB hit → PPN 즉시 획득
+                      - ④-b TLB miss → page walk: CR3→PML4[VPN1]→PDPT[VPN2]→PD[VPN3]→PT[VPN4]→PTE (4회 메모리 접근)
+                      - ⑤ PTE valid → PPN 획득, TLB 갱신 / not present → page fault / invalid → SIGSEGV
+                      - ⑥ PA = PPN + PPO → ⑦ cache 조회 (PA로 tag 비교) → ⑧ 데이터 반환
+                    - `Core i7 address translation` (§9.6.4)
+                      - 48-bit VA → 4-level → 52-bit PA
+                      - L1 d-cache: 8-way, 64 sets, 64B line
+                      - `VIPT` (Virtually Indexed, Physically Tagged) → VPO 비트로 cache index, TLB와 병렬 조회 가능
                     - `page fault` [Q5](../questions/q05-page-fault.md)
                       - bug일 수도 있고 정상적인 VM event일 수도 있다.
+                      - `minor fault` — 디스크 I/O 없이 해결 (이미 메모리에 있음)
+                      - `major fault` — 디스크에서 읽어야 함
+                      - `invalid reference` — SIGSEGV
+                      - 처리 흐름: fault → 커널 진입 → VMA 확인 → 권한 확인 → victim 선택 → write-back(dirty 시) → 로드 → PTE 갱신 → TLB 갱신 → 명령어 재실행
                       - user mode만으로는 fault를 해결할 수 없으므로 kernel policy로 이어진다.
                       - `demand paging`
                         - 필요할 때만 page를 RAM에 올리는 전략이다.
@@ -291,16 +352,30 @@
         - process image가 실제로 구성되고 file/anonymous memory가 붙는 지점이므로 kernel 다음에 온다.
         - `ELF / loader`
           - executable의 segment와 entry point를 process address space로 옮긴다.
-        - `execve()`
+        - `execve()` (§9.8.3)
           - 현재 process image를 버리고 새 program image로 바꾼다.
+          - 흐름: 기존 VA 공간 삭제 → ELF 헤더 읽기 → 새 VMA 생성
+            - .text, .data → file-backed private 매핑
+            - .bss → anonymous private (zero-fill)
+            - stack → anonymous private
+            - 공유 라이브러리 → file-backed shared
+            - PC를 entry point로 설정 → 실행 시작
         - `mmap()` [Q15](../questions/q15-mmap.md)
+          - `mmap(addr, length, prot, flags, fd, offset)`
           - file 또는 anonymous memory를 VA range에 연결하는 일반 메커니즘이다.
-          - `file-backed / anonymous`
-            - file을 backing으로 두는지, zero-fill memory로 시작하는지의 차이다.
-          - `shared / private`
-            - write 결과를 서로 공유하는지, `COW`로 분리하는지의 차이다.
-        - `fork()`
+          - `4가지 조합:`
+            - file-backed + shared → 파일 매핑, write→파일 반영, IPC 가능
+            - file-backed + private → 파일 읽기용, write→COW, 파일 불변
+            - anonymous + shared → IPC용 공유 메모리 (fd=-1)
+            - anonymous + private → 힙 확장(큰 malloc), zero-fill-on-demand
+          - `munmap()` → 매핑 해제
+          - `msync()` → dirty page를 파일에 flush
+        - `fork()` (§9.8.2)
           - parent의 address space 구조를 child에 복제한다.
+          - mm_struct 복제 → 모든 VMA 복제 → 모든 private page를 COW 설정 (read-only)
+          - shared 영역은 그대로 공유
+          - 어느 쪽이든 write → protection fault → 커널이 새 프레임 복사 → PTE 갱신
+          - fork() 후 exec()하면 복사 비용 거의 0
         - `shared library`
           - 같은 code page를 여러 process가 공유하게 한다.
         - `shared memory / IPC`
@@ -308,7 +383,9 @@
         - `brk() / sbrk()` [Q16](../questions/q16-sbrk-vs-mmap.md)
           - 전통적인 heap 확장 메커니즘이다.
         - `sbrk vs mmap` [Q16](../questions/q16-sbrk-vs-mmap.md)
-          - 작은 allocation과 큰 allocation이 다른 경로를 타는 이유를 설명한다.
+          - sbrk: 작은 블록 (< 128KB), 연속 힙, OS 반환 어려움
+          - mmap: 큰 블록 (≥ 128KB), 독립 영역, munmap으로 즉시 OS 반환
+          - 임계값은 `mallopt(M_MMAP_THRESHOLD)` 로 조정 가능
     - **Runtime, ownership, sharing**
       - <a id="8-가비지-컬렉션--gc"></a>`Runtime memory management`
         - language마다 object lifetime을 통제하는 방식이 다르므로 allocator 다음에 runtime 계층으로 내려간다.
@@ -324,13 +401,19 @@
         - `object layout`
           - object는 payload만 아니라 header, type info, pointer field를 가진다.
         - `GC`
-          - `root set`
-          - `reachability`
-          - `mark-and-sweep`
+          - `root set` — 스택, 레지스터, 전역 변수의 포인터
+          - `reachability` — root에서 포인터를 따라 도달 가능한가?
+          - `memory as directed graph` — 노드=힙 블록, 간선=포인터
+          - `mark-and-sweep` (§9.10.1)
+            - mark phase: root에서 DFS/BFS, 도달 블록에 mark bit 설정
+            - sweep phase: 힙 전체 순회, unmarked → free, marked → unmark
+            - `isPtr(w)` — 워드 w가 힙 블록을 가리키는 포인터인지 판별
           - `reference counting`
           - `generational GC`
-        - `conservative GC in C`
+        - `conservative GC in C` (§9.10.2)
           - pointer와 integer를 정확히 구분하기 어려운 C의 한계를 드러낸다.
+          - `int x = 0x4000;` — 숫자인지 포인터인지 모름 → "일단 mark" → 회수 못할 수 있음
+          - 포인터 연산 `p+4` → 블록 중간을 가리킬 수 있음 → `isPtr()` 구현에 balanced tree 필요
         - `escape analysis`
           - 어떤 object는 heap에 가지 않고 stack 또는 register 수준으로 최적화될 수 있다.
         - `GC and allocator`
