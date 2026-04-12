@@ -1,0 +1,412 @@
+# Memory Systems Keyword Tree
+
+> 목적: hardware, memory, kernel, C, allocator, runtime, bug를 하나의 tree로 묶어 장기 보관 가능한 archive로 만든다.
+> 이 문서는 주제별 요약본이 아니라, 위 개념에서 아래 개념으로 계속 내려가는 thought-expansion tree다.
+> 위에서 아래로 갈수록 더 구체적이고, 더 구현에 가까워진다.
+> 용어는 technical term만 English를 쓰고, 설명은 한국어로 적는다.
+> `[Qn]`은 검증 질문 문서다.
+
+- **Memory Systems**
+  - **Program**
+    - **C**
+      - `source code`
+        - C의 변수, 배열, 포인터, `struct`는 결국 memory를 읽고 쓰기 위한 표현이다.
+      - `object`
+        - 값만이 아니라 `크기`, `정렬`, `저장 기간`, `주소`를 함께 가진다.
+        - C에서 memory를 이해한다는 것은 결국 object를 이해하는 일이다.
+        - object를 실제로 읽고 쓰려면 결국 그 object의 address를 계산해야 하므로 pointer로 내려간다.
+      - `pointer`
+        - address를 담는 값이다.
+        - C에서 pointer는 language-level 개념과 hardware-level memory access를 직접 연결한다.
+        - 올바른 pointer는 data access가 되고, 잘못된 pointer는 `SIGSEGV` 또는 `Undefined Behavior`가 된다.
+        - `array`
+          - base address에 index offset을 더해 접근하는 연속 object 집합이다.
+        - `struct`
+          - field 배치, padding, alignment가 memory layout과 cache locality를 바꾼다.
+        - `storage duration`
+          - `static storage`
+            - program 시작부터 종료까지 살아 있는 object다.
+          - `automatic storage`
+            - 함수 call frame 생명주기를 따르는 object다.
+          - `dynamic storage`
+            - runtime에 allocator가 생명주기를 제어하는 object다.
+            - object의 lifetime을 programmer 또는 runtime이 직접 조절해야 하므로 allocator로 내려간다.
+            - <a id="7-동적-할당--mallocfree의-내부"></a>`Heap allocation`
+              - `malloc / calloc / realloc / free`
+                - heap object를 만들고, 크기를 바꾸고, 반환하는 API다.
+              - `allocator goal`
+                - `throughput`
+                - `memory utilization`
+                - 속도와 공간 효율은 자주 충돌한다.
+              - `alignment`
+                - ABI, SIMD, metadata packing, correctness와 연결된다.
+              - `heap block`
+                - `header`
+                - `payload`
+                - `padding`
+                - optional `footer`
+                - heap object는 보통 allocator metadata와 함께 저장된다.
+              - `boundary tag`
+                - 인접 free block을 빠르게 합치기 위한 metadata 구조다 [Q22](../questions/q22-split-coalesce.md).
+              - `fragmentation`
+                - `internal fragmentation`
+                  - block 내부 낭비다 [Q19](../questions/q19-fragmentation.md).
+                - `external fragmentation`
+                  - 총 free memory는 충분하지만 연속 block이 부족한 상태다 [Q19](../questions/q19-fragmentation.md).
+              - `free block organization`
+                - `implicit free list`
+                - `explicit free list`
+                - `segregated free list`
+                - allocator는 free block을 어떻게 찾고 관리할지 선택해야 한다 [Q20](../questions/q20-segregated-free-list.md).
+              - `placement policy`
+                - `first fit`
+                - `next fit`
+                - `best fit`
+                - 어떤 block을 먼저 고를지가 fragmentation의 모양을 바꾼다 [Q23](../questions/q23-placement-policy.md).
+              - `split / coalesce`
+                - 큰 free block을 나누고, 인접 free block을 다시 합치는 핵심 동작이다 [Q22](../questions/q22-split-coalesce.md).
+              - `large allocation path`
+                - 작은 block는 arena 내부 재사용이 유리하고, 큰 block는 별도 mapping이 유리할 수 있다.
+              - `thread-aware allocator`
+                - `arena`
+                - `tcache`
+                - per-thread cache
+                - contention을 줄이지만 memory footprint를 키울 수 있다.
+              - `production allocator`
+                - `glibc malloc`
+                - `jemalloc`
+                - `tcmalloc`
+              - `free() design`
+                - `free`는 pointer 하나만 받는다 [Q24](../questions/q24-free-design.md).
+                - block size는 header metadata에서 역으로 찾는다.
+                - invalid pointer에 대한 `free`는 `Undefined Behavior`다.
+      - `Undefined Behavior`
+        - C는 잘못된 memory access를 항상 예외로 막아주지 않는다.
+        - 그래서 low-level control이 강한 대신 위험도 크다.
+        - <a id="9-메모리-버그--c의-대가"></a>`memory bug`
+          - `out-of-bounds access` [Q25](../questions/q25-memory-bugs.md)
+          - `use-after-free` [Q25](../questions/q25-memory-bugs.md)
+          - `double free / invalid free` [Q24](../questions/q24-free-design.md)
+          - `memory leak` [Q25](../questions/q25-memory-bugs.md)
+          - `dangling pointer`
+          - `uninitialized read`
+          - `stack overflow`
+          - `sizeof(pointer) vs sizeof(object)` 혼동
+          - 이들은 대부분 C의 자유와 hardware 근접성이 만든 대가다.
+      - `compiler`
+        - source code를 machine code로 바꾼다.
+        - pointer dereference, array access, field access는 결국 `load/store` instruction이 된다.
+        - source code는 직접 실행되지 않으므로 실행 가능한 형태인 machine code로 내려간다.
+        - `ABI`
+          - calling convention
+          - stack layout
+          - alignment
+          - register usage
+          - source code와 machine code 사이의 계약이다.
+        - `machine code`
+          - CPU가 실제로 실행하는 instruction sequence다.
+          - memory를 다루는 instruction은 핵심적으로 load/store로 수렴하므로 그 아래로 내려간다.
+          - `load/store`
+            - CPU가 memory와 상호작용하는 최소 의미 단위다.
+            - 여기서부터 language-level object가 hardware-level address access로 바뀐다.
+            - instruction을 실제로 수행하는 주체가 CPU이므로 CPU로 내려간다.
+            - <a id="1-물리-세계--실제로-존재하는-것"></a>`CPU`
+              - `register`
+                - `PC`
+                  - 다음 instruction 위치를 가리킨다.
+                - `SP`
+                  - stack top을 가리킨다.
+                - general-purpose register
+                  - 계산값, pointer, 임시값을 담는다.
+              - `memory access granularity`
+                - `byte`
+                  - 일반적인 최소 addressable unit이다.
+                - `word`
+                  - CPU가 자연스럽게 다루는 데이터 폭이다 [Q2](../questions/q02-page-cacheline-word.md).
+                - `cache line`
+                  - cache가 데이터를 옮기는 단위다 [Q2](../questions/q02-page-cacheline-word.md).
+                - `page`
+                  - Virtual Memory가 mapping과 fault를 처리하는 단위다 [Q3](../questions/q03-page-size-4kb.md).
+              - `cache hierarchy`
+                - `L1 / L2 / L3 cache`
+                  - DRAM latency를 줄이기 위한 계층이다.
+                - `locality`
+                  - `temporal locality`
+                    - 최근 접근한 데이터를 다시 접근하는 성질이다.
+                  - `spatial locality`
+                    - 가까운 address를 연속 접근하는 성질이다.
+                - `cache coherence`
+                  - multi-core에서 같은 memory 값을 cache들이 일관되게 보게 하는 메커니즘이다.
+                  - `false sharing`
+                    - 다른 변수라도 같은 cache line을 공유하면 coherence traffic으로 성능이 무너질 수 있다.
+              - `DRAM`
+                - cache보다 크고 느린 main memory다.
+                - `memory controller`
+                  - DRAM timing과 row/bank 동작을 조절한다.
+                - `NUMA`
+                  - core와 memory 사이 거리에 따라 access cost가 달라지는 구조다.
+                - `DMA / IOMMU`
+                  - device의 직접 memory 접근과 translation/protection 경계다.
+              - `address generation`
+                - pointer를 통해 object의 address가 계산된다.
+                - 그 address는 보통 process가 보는 `Virtual Address`다.
+                - address는 항상 어떤 address space 안에서 의미를 가지므로 process address space로 내려간다.
+                - <a id="3-주소-공간--프로세스가-보는-세계"></a>`Process address space`
+                  - `process image`
+                    - `text`
+                      - code가 놓인다.
+                    - `rodata`
+                      - read-only constant가 놓인다.
+                    - `data`
+                      - initialized global/static data가 놓인다.
+                    - `bss`
+                      - zero-initialized global/static data가 놓인다.
+                    - `heap`
+                      - dynamic object가 놓인다.
+                    - `memory-mapped region`
+                      - file mapping, shared library, anonymous mapping이 놓인다.
+                    - `stack`
+                      - call frame, local variable, return address가 놓인다.
+                  - `global / static object`
+                    - source code의 전역 변수는 executable format과 loader를 거쳐 실제 memory에 올라온다 [Q6](../questions/q06-global-variable-lifecycle.md).
+                  - `user space / kernel space`
+                    - user code와 privileged kernel code의 실행 공간을 나눈다 [Q17](../questions/q17-os-kernel-process-thread.md).
+                  - `thread sharing model`
+                    - thread는 `code`, `global data`, `heap`, `VA space`를 공유한다 [Q17](../questions/q17-os-kernel-process-thread.md).
+                    - 각 thread는 `register`, `stack`, scheduling state를 별도로 가진다.
+                  - `shared page`
+                    - 여러 process가 같은 physical page를 볼 수 있는 구조다 [Q12](../questions/q12-cr3-page-sharing.md).
+                - CPU가 계산한 address가 곧바로 physical address인 것은 아니므로 Virtual Memory로 내려간다.
+                - <a id="2-가상화의-이유--vm이-해결하는-3가지-문제"></a>`Virtual Memory`
+                  - `Virtual Address (VA) / Physical Address (PA)` [Q1](../questions/q01-va-pa.md)
+                    - process가 보는 주소와 hardware가 실제로 쓰는 주소를 분리한다.
+                  - `address space abstraction`
+                    - process마다 독립된 VA 공간을 주는 추상화다.
+                  - `why Virtual Memory exists`
+                    - `caching`
+                      - DRAM을 disk-backed data의 cache처럼 쓰게 한다.
+                    - `management`
+                      - 물리적으로 흩어진 memory를 연속 공간처럼 보이게 한다.
+                    - `protection`
+                      - process/process, user/kernel 접근을 분리한다.
+                  - `page state`
+                    - `resident` [Q4](../questions/q04-resident-not-resident.md)
+                    - `not resident` [Q4](../questions/q04-resident-not-resident.md)
+                    - `unallocated` [Q4](../questions/q04-resident-not-resident.md)
+                  - `protection model`
+                    - `permission`
+                      - `read / write / execute`
+                      - `user / supervisor`
+                      - `NX/XD`
+                    - `isolation`
+                      - process/process, user/kernel을 분리한다.
+                    - `ASLR`
+                      - address를 예측하기 어렵게 만들어 exploitability를 낮춘다.
+                - VA를 실제 hardware가 소비하려면 translation이 필요하므로 Address translation으로 내려간다.
+                - <a id="4-변환-메커니즘--va--pa가-실제로-일어나는-과정"></a>`Address translation`
+                  - `MMU`
+                    - VA를 PA로 번역하는 hardware 경계다.
+                    - MMU는 빠른 hit 경로와 느린 miss 경로를 함께 가지므로 TLB와 page table로 내려간다.
+                    - `TLB` [Q13](../questions/q13-tlb.md)
+                      - 최근 translation 결과를 cache한다.
+                    - `page table`
+                      - VA를 PA로 mapping하는 자료구조다.
+                      - `multi-level page table` [Q14](../questions/q14-multi-level-page-table.md)
+                        - 안 쓰는 VA 범위의 table을 만들지 않기 위한 구조다.
+                      - `PTE (Page Table Entry)` [Q11](../questions/q11-page-table-pipeline.md)
+                        - `present / valid`
+                        - `PPN`
+                        - `read / write / execute`
+                        - `user / supervisor`
+                        - `dirty`
+                        - `accessed / reference`
+                    - `CR3 / address space switch` [Q12](../questions/q12-cr3-page-sharing.md)
+                      - 현재 address space의 최상위 page table 위치를 가리킨다.
+                    - `page walk`
+                      - TLB miss 시 page table을 따라 mapping을 찾는 과정이다.
+                    - `translation pipeline` [Q11](../questions/q11-page-table-pipeline.md)
+                      - `VA -> TLB -> page walk -> PTE check -> PA`
+                    - `page fault` [Q5](../questions/q05-page-fault.md)
+                      - bug일 수도 있고 정상적인 VM event일 수도 있다.
+                      - user mode만으로는 fault를 해결할 수 없으므로 kernel policy로 이어진다.
+                      - `demand paging`
+                        - 필요할 때만 page를 RAM에 올리는 전략이다.
+                      - `working set`
+                        - 일정 시간 동안 자주 쓰는 page 집합이다.
+                      - `thrashing`
+                        - working set가 physical memory보다 커졌을 때 생기는 붕괴 상태다.
+                      - `page replacement`
+                        - `LRU approximation`
+                        - `clock`
+                        - `reference bit`
+                      - `Copy-on-Write (COW)` [Q9](../questions/q09-cow.md)
+                        - 처음엔 공유하고 첫 write 때만 copy하는 전략이다.
+                      - `huge page`
+                        - 더 큰 page로 TLB coverage를 높이는 전략이다.
+                    - `translation and cache interaction`
+                      - `VIPT cache`
+                        - translation과 cache indexing이 서로 독립이 아님을 보여준다.
+                  - `Physical Address`
+                    - 최종적으로 cache hierarchy와 DRAM이 소비하는 주소다.
+                    - translation이 끝나도 비용은 남아 있으므로 cache와 DRAM 계층으로 이어진다.
+                    - `cache hit / miss`
+                      - cache 성능이 보이는 첫 번째 결과다.
+                    - `DRAM access`
+                      - cache miss 뒤에 따라오는 더 비싼 access다.
+                    - `disk-backed page`
+                      - resident하지 않은 page라면 disk 또는 file backing까지 이어질 수 있다.
+    - **Kernel interaction**
+      - <a id="5-커널의-역할--누가-이-모든-걸-관리하는가"></a>`Kernel`
+        - hardware가 fault, privilege, process isolation 문제를 user mode 밖으로 넘기기 때문에 kernel로 내려간다.
+        - `OS / kernel / scheduler`
+          - scheduler, VM, file system, driver가 만나는 privileged core다 [Q17](../questions/q17-os-kernel-process-thread.md).
+        - `task_struct / mm_struct / VMA` [Q7](../questions/q07-vma-vs-page-table.md)
+          - `task_struct`
+            - 실행 상태를 담는다.
+          - `mm_struct`
+            - address space 전체를 나타낸다.
+          - `VMA`
+            - VA 범위의 의미를 나타낸다.
+            - `VMA`는 "무슨 영역인가", page table은 "어느 frame인가"를 뜻한다.
+        - `page fault handler`
+          - fault address, permission, file read, zero-fill, swap-in, COW, eviction을 판단한다.
+        - `syscall / interrupt / exception` [Q18](../questions/q18-kernel-mode-entry.md)
+          - kernel로 진입하는 대표 경로다.
+        - `context switch`
+          - register 집합과 때로는 address space를 바꾸는 과정이다.
+        - `physical page allocator`
+          - kernel이 physical memory를 page/frame 단위로 관리하는 계층이다.
+          - `buddy allocator`
+            - contiguous page allocation의 대표 구조다.
+        - `kernel object allocator`
+          - `slab/slub`
+            - kernel 내부 object를 효율적으로 재사용한다.
+        - `page cache`
+          - file I/O와 memory mapping이 만나는 핵심 cache 계층이다.
+        - `overcommit / OOM killer`
+          - 미래 사용을 가정한 allocation과 그 가정이 깨졌을 때의 최종 방어선이다.
+        - `zero-fill-on-demand`
+          - 새 anonymous page를 처음 접근할 때 0으로 채운 frame을 준다.
+      - <a id="6-메모리-매핑--프로그램이-메모리를-얻는-방법"></a>`Program loading and mapping`
+        - process image가 실제로 구성되고 file/anonymous memory가 붙는 지점이므로 kernel 다음에 온다.
+        - `ELF / loader`
+          - executable의 segment와 entry point를 process address space로 옮긴다.
+        - `execve()`
+          - 현재 process image를 버리고 새 program image로 바꾼다.
+        - `mmap()` [Q15](../questions/q15-mmap.md)
+          - file 또는 anonymous memory를 VA range에 연결하는 일반 메커니즘이다.
+          - `file-backed / anonymous`
+            - file을 backing으로 두는지, zero-fill memory로 시작하는지의 차이다.
+          - `shared / private`
+            - write 결과를 서로 공유하는지, `COW`로 분리하는지의 차이다.
+        - `fork()`
+          - parent의 address space 구조를 child에 복제한다.
+        - `shared library`
+          - 같은 code page를 여러 process가 공유하게 한다.
+        - `shared memory / IPC`
+          - process 간 data를 shared page로 교환한다.
+        - `brk() / sbrk()` [Q16](../questions/q16-sbrk-vs-mmap.md)
+          - 전통적인 heap 확장 메커니즘이다.
+        - `sbrk vs mmap` [Q16](../questions/q16-sbrk-vs-mmap.md)
+          - 작은 allocation과 큰 allocation이 다른 경로를 타는 이유를 설명한다.
+    - **Runtime, ownership, sharing**
+      - <a id="8-가비지-컬렉션--gc"></a>`Runtime memory management`
+        - language마다 object lifetime을 통제하는 방식이 다르므로 allocator 다음에 runtime 계층으로 내려간다.
+        - `C++`
+          - RAII, smart pointer, custom allocator로 ownership을 구조화한다.
+        - `Rust`
+          - ownership, borrow, lifetime으로 많은 memory bug를 compile-time에 막는다.
+        - `managed runtime`
+          - `JVM`
+          - `Go`
+          - `Python`
+          - `JavaScript runtime`
+        - `object layout`
+          - object는 payload만 아니라 header, type info, pointer field를 가진다.
+        - `GC`
+          - `root set`
+          - `reachability`
+          - `mark-and-sweep`
+          - `reference counting`
+          - `generational GC`
+        - `conservative GC in C`
+          - pointer와 integer를 정확히 구분하기 어려운 C의 한계를 드러낸다.
+        - `escape analysis`
+          - 어떤 object는 heap에 가지 않고 stack 또는 register 수준으로 최적화될 수 있다.
+        - `GC and allocator`
+          - GC는 "언제 죽는가", allocator는 "어디에 놓는가"를 결정한다.
+      - `concurrency`
+        - 같은 address space를 여러 실행 흐름이 공유하는 순간 ordering과 visibility 문제가 생기므로 runtime 다음에 concurrency로 내려간다.
+        - `thread memory model`
+          - 같은 address space를 공유하지만 관측 순서는 단순하지 않다.
+        - `shared heap / thread-local state`
+          - stack과 register는 thread-local하고 heap과 global data는 공유되기 쉽다.
+        - `race condition`
+          - synchronization 없이 같은 location을 접근할 때 생긴다.
+        - `synchronization primitive`
+          - `mutex`
+          - `rwlock`
+          - `semaphore`
+          - `condition variable`
+          - `futex`
+        - `atomic operation`
+          - `compare-and-swap`
+          - `fetch-add`
+        - `memory ordering`
+          - `acquire`
+          - `release`
+          - `seq_cst`
+          - `fence`
+        - `coherence vs consistency`
+          - 같은 값을 맞추는 문제와 순서를 맞추는 문제를 구분한다.
+        - `memory reclamation`
+          - `hazard pointer`
+          - `epoch-based reclamation`
+          - `RCU`
+    - **Failure, security, observability**
+      - 앞선 모든 계층의 결과가 실제 운영 증상으로 드러나는 곳이므로 마지막에 둔다.
+      - `performance pathology`
+        - `cache miss`
+        - `TLB miss`
+        - `major page fault`
+        - `thrashing`
+        - `allocator contention`
+        - `NUMA remote access`
+      - `security impact`
+        - `heap corruption`
+        - `out-of-bounds write`
+        - `control-flow hijack`
+        - `data-only attack`
+      - `mitigation`
+        - `ASLR`
+        - `NX/XD`
+        - `stack canary`
+        - `CFI`
+        - `MTE / memory tagging`
+      - `observability`
+        - `ASan`
+        - `MSan`
+        - `UBSan`
+        - `TSan`
+        - `Valgrind Memcheck`
+        - `/proc/<pid>/maps`
+        - `/proc/<pid>/smaps`
+        - `pmap`
+        - `vmstat`
+        - `free`
+        - `perf`
+        - hardware performance counter
+        - heap profiler
+        - flame graph
+        - `core dump`
+    - **핵심 연결**
+      - `C object -> pointer -> load/store -> CPU -> VA -> MMU -> TLB -> page table -> PTE -> PA -> cache line -> DRAM`
+        - C 코드의 memory access가 실제 hardware 경로를 따라 어떻게 실행되는지 보여주는 핵심 spine이다.
+      - `dynamic object -> allocator metadata -> heap policy`
+        - heap object는 값만 보는 것이 아니라 allocator 규칙까지 함께 봐야 한다.
+      - `VA -> process address space -> kernel policy -> physical page`
+        - memory는 단순한 주소 숫자가 아니라 process, kernel, hardware가 함께 해석하는 구조다.
+      - `shared memory -> coherence / ordering / race`
+        - correctness와 성능 문제는 같은 shared memory 위에서 함께 발생한다.
+      - `bug / performance / security`
+        - 최종 증상은 다르지만 원인은 거의 항상 이 tree 어딘가에서 출발한다.
