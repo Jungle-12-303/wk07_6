@@ -10,7 +10,15 @@
 
 ## 답변
 
-> 여기에 작성...
+int g = 42; 는 소스코드 단계에서는 전역 초기화 변수이고, 컴파일/어셈블을 거치며 실행파일의 .data section 내용으로 들어감.
+링커는 이 전역 변수의 심볼과 section 배치를 정리하고, 로더/커널은 execve 시 이 실행파일 구간을 file-backed private VMA로 주소공간에 memory mapping 함.
+이 시점에는 g가 이미 “가상주소공간에는 존재”하지만, 아직 DRAM에 올라와 있지 않을 수 있으므로 할당됨 ≠ 상주함 임.
+
+프로그램이 처음 g에 접근하면, 해당 VA에 대한 PTE가 non-resident 상태라 page fault가 나고, 커널이 실행파일의 .data가 들어 있는 page를 disk에서 읽어 물리 프레임에 적재한 뒤 PTE를 갱신함.
+그 후 MMU가 g의 VA를 그 물리 프레임의 PA로 번역하고, 이후 접근은 hit 경로로 처리됨.
+
+키워드: global variable, .data, compiler, assembler, linker, loader, execve, file-backed mapping, VMA, demand paging, page fault, PTE, resident, non-resident, MMU, VA→PA, physical frame
+
 
 ## 연결 키워드
 

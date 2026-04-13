@@ -10,7 +10,14 @@
 
 ## 답변
 
-> 여기에 작성...
+SUP 비트는 user/supervisor 접근 가능 여부를 결정하고, READ 비트는 읽기 허용 여부, WRITE 비트는 쓰기 허용 여부를 결정함.
+유저 프로세스가 커널 영역 주소를 읽으려 하면, 해당 PTE의 SUP 설정과 현재 user mode가 충돌하여 protection fault가 발생함.
+
+READ-only 페이지에 write를 시도하면, 해당 접근이 PTE의 WRITE 권한 검사에서 거부되어 general protection fault / segmentation fault 계열 예외로 처리됨.
+커널은 이 예외를 받으면 단순 page-in이 아니라 불법 접근으로 판단하고, 보통 해당 프로세스에 SIGSEGV를 전달해 종료 방향으로 처리함.
+즉 메모리 보호는 “주소가 존재하느냐”보다 그 주소에 대해 현재 모드에서 어떤 연산이 허용되느냐를 PTE permission bits로 통제하는 구조임.
+
+키워드: SUP bit, READ bit, WRITE bit, PTE permission bits, user mode, kernel mode, protection, protection fault, general protection fault, segmentation fault, SIGSEGV
 
 ## 연결 키워드
 

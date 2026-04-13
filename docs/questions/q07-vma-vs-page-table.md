@@ -10,6 +10,14 @@
 
 ## 답변
 
+VMA는 이 주소 범위가 무엇인지를 설명하는 구조이고, 페이지 테이블은 그 주소를 어디로 번역할지를 기록하는 구조임.
+VMA는 영역의 의미와 권한을 관리하고, 페이지 테이블은 VA→PA 변환과 resident 상태를 관리함.같은 VA에 대해 VMA는 있는데 PTE가 없을 수 있음.
+예: 그 주소가 합법적인 heap/code/mmap 영역 안이지만 아직 한 번도 접근되지 않아 Demand Paging으로 실제 page table entry나 resident page가 아직 만들어지지 않은 경우임.
+
+프로세스가 특정 VA에 접근하면, 정상 hit 경로에서는 MMU가 먼저 페이지 테이블을 따라 번역하고, page fault가 나면 커널이 먼저 VMA로 그 주소가 합법한 영역인지와 권한이 맞는지 확인한 뒤, 그다음 페이지 테이블/PTE를 채우거나 갱신함.
+
+키워드: vm_area_struct, VMA, Page Table, address translation, VA→PA, region semantics, protection, permissions, legal address, demand paging, page fault, resident, non-resident, mmap, heap, stack
+
 ### 최우녕
 
 > vm_area_struct(VMA)와 페이지 테이블의 역할 차이를 설명하시오.
