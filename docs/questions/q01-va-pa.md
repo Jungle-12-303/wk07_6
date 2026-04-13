@@ -10,7 +10,14 @@
 
 ## 답변
 
-> 여기에 작성...
+VA는 프로그램이 보는 주소임.
+PA는 실제 DRAM의 주소임.
+가상 메모리는 메모리를 “더 저장”하는 장치가 아니라, VA를 PA로 바꾸는 주소 변환 체계임.
+
+포인터 0x4000을 읽을 때 실제 PA를 정하는 주체는 프로그램이 아니라 MMU와 현재 프로세스의 Page Table임.
+MMU가 VA를 해석하고, 해당 PTE를 찾아 PPN을 얻은 뒤 offset을 붙여 PA를 만듦.
+
+키워드: Address Space, private address space, MMU, VPN/VPO, PPN/PPO, PTE, Page Table, Translation, page fault, protection
 
 ## 연결 키워드
 

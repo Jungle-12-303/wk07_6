@@ -10,7 +10,17 @@
 
 ## 답변
 
-> 여기에 작성...
+페이지가 너무 작으면 페이지 테이블 크기와 번역 관리 비용이 커지고, disk I/O가 너무 잘게 쪼개져 비효율적임.
+페이지가 너무 크면 내부 단편화와 과잉 적재(overfetch) 가 커지며, 실제로 안 쓰는 데이터까지 함께 올려 locality 활용이 나빠질 수 있음.
+개념적으로 총비용은 C(P)=A/P + B·P 로 볼 수 있고, 이를 미분하면 dC/dP = -A/P² + B = 0, 따라서 균형점은 P* = √(A/B) 임.
+
+64-bit 시스템에서 4KB page면 virtual page 수는 2^64 / 2^12 = 2^52, 
+PTE가 8B라면 단일 페이지 테이블 크기는 2^52 × 8 = 2^55B = 32PB 가 되어 비현실적이므로 Multi-Level Page Table 이 필요함.
+
+현대 시스템은 4KB만 고집하지 않고, x86-64는 보통 4KB base page를 유지하는 반면 arm64는 4KB·16KB·64KB base page 를 지원하는 등, 
+TLB reach·페이지 테이블 오버헤드·워크로드 특성에 따라 더 큰 base page를 쓰는 방향도 함께 발전 중임.
+
+키워드: Goldilocks principle, C(P)=A/P + B·P, P*=√(A/B), internal fragmentation, overfetch, page table size, 32PB, Multi-Level Page Table, TLB reach, 4KB, 16KB, 64KB, x86-64, arm64
 
 ## 연결 키워드
 

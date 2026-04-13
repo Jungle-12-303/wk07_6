@@ -10,7 +10,14 @@
 
 ## 답변
 
-> 여기에 작성...
+valid = 1 인데 물리 메모리에 없다는 상태는, 그 페이지가 논리적으로는 유효한 페이지이지만 현재는 DRAM에 상주하지 않고 disk 쪽 backing store에 있는 상태임.
+할당됨 ≠ 상주함은, 어떤 가상 페이지가 프로세스 주소공간에 속해 접근 가능한 상태여도 처음부터 DRAM에 올라와 있을 필요는 없다는 뜻이며, Demand Paging은 실제 참조 시점에만 page를 메모리로 가져옴.
+
+valid + memory는 유효하고 현재 DRAM에 resident인 상태임.
+valid + disk는 유효하지만 현재는 non-resident이며 page fault 시 disk에서 가져올 수 있는 상태임.
+invalid는 아예 할당되지 않았거나 접근 자체가 허용되지 않는 상태이며, 접근하면 정상 page-in이 아니라 예외/segfault 쪽으로 감.
+
+키워드: PTE, valid bit, resident, non-resident, backing store, demand paging, page fault, legal address, invalid page, protection fault
 
 ## 연결 키워드
 
