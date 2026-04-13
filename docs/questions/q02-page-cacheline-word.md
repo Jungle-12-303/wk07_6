@@ -26,6 +26,10 @@ cache miss면 DRAM에서 cache line 적재,
 
 키워드: page, cache line, word, VM, cache hierarchy, locality, spatial locality, temporal locality, TLB, MMU, VA→PA, page fault, resident, DRAM, disk, register
 
+### 최영빈
+
+> 1. VM, PM가 페이지단위를 사용한다. 워드는 CPU가 한번에 처리할 수 있는 정보의 크기 단위이다.
+
 ## 연결 키워드
 
 - [Cache](../csapp-ch9-virtual-memory/csapp-ch9-keyword-tree.md#1-물리-세계--실제로-존재하는-것)
