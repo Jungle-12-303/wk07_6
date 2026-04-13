@@ -45,28 +45,85 @@
 
 ### 최우녕
 
-Page fault는 잘못된 접근만 뜻하는 것이 아니라, 필요한 page가 아직 DRAM에 없음을 알리는 정상적인 이벤트이기 때문에 “에러”보다 페이지 적재를 유발하는 예외 이벤트로 보는 것이 정확함.
-Minor / Major / Invalid fault의 구분 기준은 합법한 주소인가, page가 이미 메모리에 있나, disk I/O가 필요한가 세 가지임.
+> Page fault가 "에러"가 아니라 "이벤트"인 이유를 설명하시오.
 
-Minor fault는 접근한 VA가 합법적이고, 필요한 page도 이미 어떤 형태로는 준비되어 있지만, 현재 CPU가 바로 쓸 수 있는 PTE/매핑 상태만 아직 안 맞아서 생기는 fault임.
-핵심은 disk I/O가 없다는 것임.
-예를 들어 page가 이미 메모리에 있는데 PTE 갱신만 필요하거나, 다른 프로세스와 shared page를 연결하면 해결되는 경우가 여기에 가까움.
-그래서 처리 비용은 주로 커널 진입, 페이지 테이블 수정, TLB 갱신 정도이고, storage access는 없음.
+Page Fault는 CPU가 VA에 접근했는데 해당 페이지가 DRAM에 없을 때 발생하는 예외다.
+이름에 "fault"가 들어있지만, 대부분의 경우 커널이 디스크에서 페이지를 가져오면
+정상적으로 처리가 끝나고 명령어가 재실행된다.
 
-Major fault는 접근한 VA가 합법적이지만, 필요한 page가 현재 DRAM에 없어서 진짜로 disk 또는 swap space에서 읽어와야 하는 fault임.
-즉 이 경우는 page fault handler가 victim 선택 → 필요 시 write-back → disk에서 page read → PTE 갱신 → instruction 재실행 순서로 움직임.
-비용이 큰 이유는 주소 번역 자체보다 disk I/O latency가 압도적으로 크기 때문임.
-Demand Paging에서 우리가 보통 떠올리는 “정상적인 page fault”는 대체로 이 Major fault 쪽임.
+Demand Paging 자체가 "필요할 때 DRAM에 올린다"는 설계이므로
+Page Fault는 이 설계의 정상적인 동작 과정이다.
+프로그램 버그가 아니라 운영체제가 의도한 메커니즘인 것이다.
 
-Invalid fault는 애초에 그 접근이 정상 page-in 대상이 아닌 경우임.
-대표적으로 주소 자체가 어떤 VMA에도 속하지 않음, user mode가 kernel page 접근, read-only page에 write 시도 같은 경우임.
-이때는 “page를 가져오면 해결”이 아니라 보호 위반 또는 잘못된 주소 접근이므로, 커널은 보통 SIGSEGV 같은 예외 처리로 프로세스를 종료 방향으로 보냄.
+진짜 에러는 Invalid fault(할당되지 않은 영역 접근)뿐이고,
+이때는 Segmentation Fault로 프로세스가 종료된다.
 
-Major fault가 나면 커널은 먼저 victim page를 고르고, victim이 dirty하면 swap space/disk에 write-back함.
-그다음 필요한 page를 disk에서 DRAM으로 읽어오고, PTE를 갱신한 뒤 필요하면 TLB 상태도 반영함.
-마지막으로 faulting instruction을 재실행하여 이번에는 정상적으로 메모리 접근이 이루어지게 함.
+> Minor / Major / Invalid fault를 각각 구분하시오.
 
-키워드: page fault, event, exception, minor fault, major fault, invalid fault, page fault handler, victim page, dirty page, swap space, disk I/O, PTE update, restart instruction
+Minor Fault: 페이지가 이미 DRAM 어딘가에 있지만 현재 프로세스의 PTE에 매핑이 안 된 경우.
+디스크 I/O 없이 PTE만 갱신하면 된다.
+예: fork() 후 COW(Copy-on-Write) 페이지에 쓰기 시도,
+또는 다른 프로세스가 이미 올려놓은 공유 라이브러리 페이지.
+
+Major Fault: 페이지가 DRAM에 없고 디스크(스왑)에서 읽어와야 하는 경우.
+디스크 I/O가 발생하므로 수 ms가 걸려서 비용이 비싸다.
+
+Invalid Fault: 할당되지 않은 VA에 접근한 경우.
+커널이 복구할 수 없으므로 Segmentation Fault(SIGSEGV)를 보내 프로세스를 종료한다.
+이것만 진짜 "에러"다.
+
+> [검증] Major fault 발생 시 커널의 처리 순서를 victim 선택부터 명령어 재실행까지 나열하시오.
+
+```text
+전제: 프로세스가 VA 0x8000에 접근, 해당 페이지가 디스크에만 존재
+
+━━━ Major Page Fault 처리 순서 ━━━━━━━━━━━━━━━━━
+
+  CPU: mov 명령 → VA 0x8000 → MMU 전달
+  |
+  MMU: TLB MISS → 페이지 테이블 워크 → PTE 확인
+  |
+  ㄴ PTE: 할당됨 + DRAM에 없음 (커널 자료구조에 디스크 주소 있음)
+     |
+     ㄴ Page Fault 예외 발생 → 커널 모드 전환
+
+━━━ 커널 폴트 핸들러 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. 빈 프레임 확인
+     |
+     ㄴ 빈 프레임 있음 → 3으로
+     ㄴ 빈 프레임 없음 → 2로
+
+  2. Victim 선택 (페이지 교체)
+     |
+     ㄴ 교체 알고리즘(LRU 등)으로 evict할 페이지 선택
+     ㄴ victim이 dirty(수정됨)면 → 디스크에 write-back
+     ㄴ victim의 PTE 무효화 + TLB에서 flush
+     ㄴ 이제 빈 프레임 확보됨
+
+  3. 디스크 → DRAM 로드
+     |
+     ㄴ 커널 자료구조에서 디스크 주소 확인
+     ㄴ 해당 위치에서 페이지 데이터 읽기
+     ㄴ 확보한 프레임에 복사 (~수 ms, 가장 비싼 단계)
+
+  4. PTE 갱신
+     |
+     ㄴ PPN = 새로 할당한 프레임 번호
+     ㄴ valid bit = 1
+     ㄴ TLB에 새 엔트리 캐싱
+
+  5. 트랩 복귀 → 명령어 재실행
+     |
+     ㄴ CPU가 같은 mov 명령을 다시 실행
+     ㄴ 이번엔 PTE valid + DRAM에 있음 → 정상 접근
+
+━━━ 비용 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Minor Fault: ~수 μs (디스크 I/O 없음, PTE 갱신만)
+  Major Fault: ~수 ms  (디스크 I/O 포함, 수백만 사이클)
+  Normal 접근: ~수 ns  (TLB HIT + 캐시 HIT)
+```
 
 ## 연결 키워드
 
