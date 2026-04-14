@@ -35,13 +35,13 @@
    8. TLB 갱신: 새로 매핑된 가상->물리 주소 쌍을 TLB에 적재
    9. 폴트 발생 명령어 재실행: 프로세스를 `ready` 상태로 전환하고, 폴트를 일으켰던 명령어를 처음부터 재실행. TLB/
 
-- [](./imgs/Pasted%20image%2020260413134339.png)
+- ![](./imgs/Pasted%20image%2020260413134339.png)
 
 ### TLB(Translation Lookaside Buffer)
 
 가상 주소 -> 물리 주소 변환 결과를 캐싱하는 하드웨어 캐시
 
-- [](./imgs/Pasted%20image%2020260413135609.png)
+- ![](./imgs/Pasted%20image%2020260413135609.png)
 
 ### 최우녕
 
