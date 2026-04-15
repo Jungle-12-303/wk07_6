@@ -1,1 +1,500 @@
-# week7-team6
+# MiniDB — 디스크 기반 SQL 엔진
+
+pread/pwrite 기반 pager, slotted heap table, on-disk B+ tree index, rule-based planner를 포함한
+최소 SQL 엔진이다. 단일 `.db` 파일에 모든 데이터를 저장하며, 종료 시 dirty page를 일괄 flush한다.
+
+
+## 실행 환경 (Dev Container)
+
+이 프로젝트는 VS Code Dev Container(Docker)에서 실행한다.
+
+### 사전 요구사항
+
+- Docker Desktop 설치
+- VS Code + "Dev Containers" 확장 설치
+
+### 컨테이너 실행 방법
+
+1. VS Code에서 프로젝트 폴더를 연다.
+2. `Cmd+Shift+P` (Mac) 또는 `Ctrl+Shift+P` (Windows/Linux) → `Dev Containers: Reopen in Container` 선택.
+3. Docker 이미지가 빌드되고 Ubuntu 컨테이너 안에서 터미널이 열린다.
+4. 컨테이너 내부 사용자는 `jungle`이며, sudo 권한이 있다.
+
+### 컨테이너 환경
+
+- OS: Ubuntu (latest)
+- 컴파일러: gcc (build-essential)
+- 디버거: gdb, valgrind
+- 시간대: Asia/Seoul
+- 로케일: ko_KR.UTF-8
+
+
+## 빌드
+
+```bash
+make          # 전체 빌드 (build/minidb 생성)
+make clean    # 빌드 산출물 및 .db 파일 제거
+```
+
+컴파일 플래그: `-Wall -Wextra -Werror -g -fsanitize=address,undefined`
+
+AddressSanitizer와 UndefinedBehaviorSanitizer가 기본 활성화되어 있어
+메모리 오류와 정의되지 않은 동작을 런타임에 감지한다.
+
+
+## 실행
+
+```bash
+make run      # sql.db 파일로 REPL 실행
+```
+
+또는 직접 DB 파일 이름을 지정할 수 있다:
+
+```bash
+./build/minidb mydb.db
+```
+
+기존 DB 파일이 있으면 자동으로 열고, 없으면 새로 생성한다.
+
+실행하면 아래와 같은 REPL 프롬프트가 나타난다:
+
+```
+minidb> Connected to sql.db (page_size=4096)
+minidb>
+```
+
+
+## 지원 SQL 명령어
+
+### CREATE TABLE
+
+테이블을 생성한다. `id BIGINT` 컬럼은 시스템이 자동 추가하므로 정의하지 않는다.
+
+```sql
+CREATE TABLE users (name VARCHAR(32), age INT);
+```
+
+지원 타입:
+
+| 타입 | 크기 | 설명 |
+|------|------|------|
+| INT | 4바이트 | 32비트 정수 |
+| BIGINT | 8바이트 | 64비트 정수 |
+| VARCHAR(N) | N바이트 | 가변 길이 문자열 (최대 N자, 기본 32) |
+
+제약: 현재 단일 테이블만 지원한다. 이미 테이블이 존재하면 에러를 반환한다.
+
+### INSERT INTO
+
+행을 삽입한다. `id`는 자동 증가하므로 값 목록에 포함하지 않는다.
+
+```sql
+INSERT INTO users VALUES ('홍길동', 25);
+INSERT INTO users VALUES ('김철수', 30);
+```
+
+출력 예시: `Inserted 1 row (id=1)`
+
+### SELECT * FROM ... WHERE
+
+조건에 맞는 행을 조회한다.
+
+```sql
+-- id로 조회 (B+ tree INDEX_LOOKUP 사용, O(log n))
+SELECT * FROM users WHERE id = 1;
+
+-- 다른 컬럼으로 조회 (TABLE_SCAN 사용, O(n))
+SELECT * FROM users WHERE name = '홍길동';
+
+-- 전체 조회 (TABLE_SCAN)
+SELECT * FROM users;
+```
+
+출력 예시:
+
+```
+id | name | age
+-----------+-----------+-----------
+1 | 홍길동 | 25
+1 row (INDEX_LOOKUP)
+```
+
+### DELETE FROM ... WHERE
+
+조건에 맞는 행을 삭제한다. 삭제된 슬롯은 free slot chain에 연결되어 재사용된다.
+
+```sql
+-- id로 삭제 (INDEX_DELETE, O(log n))
+DELETE FROM users WHERE id = 1;
+
+-- 다른 컬럼으로 삭제 (TABLE_SCAN으로 대상을 찾은 뒤 일괄 삭제)
+DELETE FROM users WHERE name = '홍길동';
+```
+
+### EXPLAIN
+
+실행 계획을 보여준다. 실제 실행은 하지 않는다.
+
+```sql
+EXPLAIN SELECT * FROM users WHERE id = 1;
+EXPLAIN DELETE FROM users WHERE name = '김철수';
+```
+
+출력 예시:
+
+```
+Access Path: INDEX_LOOKUP
+  Index: B+ Tree (id)
+  Target: id = 1
+EXPLAIN done
+```
+
+접근 경로(Access Path) 종류:
+
+| Access Path | 의미 | 사용 조건 |
+|-------------|------|----------|
+| INDEX_LOOKUP | B+ tree 인덱스 검색 | SELECT WHERE id = N |
+| TABLE_SCAN | 전체 heap page 순차 탐색 | SELECT WHERE (id 외 컬럼) 또는 조건 없음 |
+| INDEX_DELETE | B+ tree로 찾아 삭제 | DELETE WHERE id = N |
+| INSERT | heap 삽입 + 인덱스 등록 | INSERT INTO |
+| CREATE_TABLE | 스키마 등록 | CREATE TABLE |
+
+
+## 메타 명령어
+
+REPL에서 `.`으로 시작하는 디버그 명령어를 사용할 수 있다.
+
+### .btree
+
+B+ tree의 전체 구조를 트리 형태로 출력한다. 각 노드의 페이지 번호와 키 목록을 보여준다.
+
+```
+minidb> .btree
+B+ Tree (root: page 2)
+  [LEAF page=2] keys=3: 1 2 3
+```
+
+대량 삽입 후에는 internal 노드와 여러 leaf 노드가 트리 구조로 표시된다.
+
+### .pages
+
+데이터베이스 파일의 페이지 구성을 타입별로 보여준다. free page list도 출력한다.
+
+```
+minidb> .pages
+Total pages: 4
+  HEADER:   1
+  HEAP:     1
+  LEAF:     1
+  INTERNAL: 0
+  FREE:     0
+```
+
+| 페이지 타입 | 설명 |
+|------------|------|
+| HEADER | DB 메타데이터 (page 0, 항상 1개) |
+| HEAP | 행 데이터 저장 (slotted page) |
+| LEAF | B+ tree 리프 노드 (key → row_ref 매핑) |
+| INTERNAL | B+ tree 내부 노드 (라우팅) |
+| FREE | 삭제 후 반환된 빈 페이지 (free page list) |
+
+### .stats
+
+데이터베이스 통계 정보를 출력한다.
+
+```
+minidb> .stats
+Rows: 3 (live)
+Next ID: 4
+Page size: 4096
+Row size: 44
+Rows per heap page: ~85
+Total pages: 4
+B+ Tree height: 1
+Free page head: 0
+```
+
+| 항목 | 의미 |
+|------|------|
+| Rows | 현재 살아있는 행 수 |
+| Next ID | 다음 INSERT 시 부여될 id |
+| Page size | OS 페이지 크기 (sysconf 기반) |
+| Row size | 행 하나의 직렬화 크기 (바이트) |
+| Rows per heap page | heap 페이지당 예상 행 수 |
+| Total pages | DB 파일 내 전체 페이지 수 |
+| B+ Tree height | B+ tree 높이 |
+| Free page head | free page list의 첫 페이지 (0이면 없음) |
+
+### .exit / .quit
+
+REPL을 종료한다. dirty page를 flush하고 DB 파일을 닫는다.
+
+```
+minidb> .exit
+Bye.
+```
+
+
+## 테스트
+
+```bash
+make test     # 전체 테스트 실행 (73개 assertion)
+```
+
+테스트 바이너리는 `build/test_all`로 생성되며, 8개 테스트 스위트를 포함한다:
+
+| 스위트 | 검증 항목 |
+|--------|----------|
+| test_schema | 레이아웃 계산, serialize/deserialize 왕복 |
+| test_pager | DB 생성/재오픈, magic 검증, alloc/free/realloc |
+| test_heap | insert/fetch/delete, free slot 재사용, scan |
+| test_bptree | 단건 insert/search, 중복 거부, 2000건 bulk insert, 500건 delete |
+| test_parser | CREATE TABLE, INSERT, SELECT, DELETE, EXPLAIN 파싱 |
+| test_planner | 조건별 접근 경로 선택 (INDEX_LOOKUP, TABLE_SCAN, INDEX_DELETE) |
+| test_persistence | 100건 삽입 → 종료 → 재오픈 → 데이터 정합성 검증 |
+| test_delete_reuse | 삽입 → 삭제 → 재삽입 → 카운트 및 인덱스 정합성 |
+
+실행 결과 예시:
+
+```
+=== MiniDB Test Suite ===
+
+[test_schema]
+[test_pager]
+[test_heap]
+[test_bptree]
+[test_parser]
+[test_planner]
+[test_persistence]
+[test_delete_reuse]
+
+=== Results: 73/73 passed ===
+```
+
+
+## 프로젝트 구조
+
+```
+.
+├── .devcontainer/          # Docker Dev Container 설정
+│   ├── Dockerfile          # Ubuntu + gcc + gdb + valgrind
+│   └── devcontainer.json   # VS Code 확장 및 설정
+├── include/
+│   ├── storage/
+│   │   ├── page_format.h   # 페이지/헤더/슬롯 구조체 정의
+│   │   ├── pager.h         # page frame cache API
+│   │   ├── schema.h        # 행 직렬화/역직렬화
+│   │   ├── table.h         # slotted heap table API
+│   │   └── bptree.h        # B+ tree index API
+│   └── sql/
+│       ├── statement.h     # SQL 문장 구조체
+│       ├── parser.h        # SQL 파서
+│       ├── planner.h       # rule-based 플래너
+│       └── executor.h      # 실행기
+├── src/
+│   ├── storage/
+│   │   ├── pager.c         # pread/pwrite 기반 pager (LRU, free page list)
+│   │   ├── schema.c        # 컬럼 레이아웃 계산, memcpy 기반 직렬화
+│   │   ├── table.c         # slotted heap (free slot chain 재사용)
+│   │   └── bptree.c        # on-disk B+ tree (split/merge/borrow)
+│   ├── sql/
+│   │   ├── parser.c        # 최소 SQL 파서
+│   │   ├── planner.c       # 접근 경로 결정
+│   │   └── executor.c      # 실행 디스패치
+│   └── main.c              # REPL + 메타 명령어
+├── tests/
+│   └── test_all.c          # 73개 assertion, 8개 스위트
+├── docs/                   # 설계 문서
+├── Makefile
+└── .gitignore
+```
+
+
+## 전체 로직 흐름
+
+### 1. DB 열기 (pager_open)
+
+```
+main() → pager_open()
+  ├── sysconf(_SC_PAGESIZE)로 OS 페이지 크기 획득
+  ├── 파일 존재 여부 확인
+  ├── [신규] page 0(header) + page 1(heap) + page 2(leaf root) 초기화 → fsync
+  └── [기존] page 0에서 header 읽기 → magic 검증 → page_size 복원
+```
+
+pager는 MAX_FRAMES(256)개의 frame을 메모리에 할당한다. 각 frame은 page_size 바이트 버퍼다.
+모든 페이지 접근은 `pager_get_page()`를 통해 frame cache를 거친다.
+cache miss 시 LRU eviction으로 가장 오래된 unpinned frame을 교체하고, dirty면 디스크에 먼저 쓴다.
+
+### 2. CREATE TABLE
+
+```
+입력: "CREATE TABLE users (name VARCHAR(32), age INT)"
+  → parser: 컬럼 정의 파싱 (name, type, size)
+  → executor: id BIGINT 시스템 컬럼 자동 추가
+  → schema_compute_layout(): 각 컬럼 offset 계산, row_size 확정
+  → header에 column_meta 저장, header_dirty = true
+```
+
+스키마 정보는 db_header_t의 columns[] 배열에 저장된다.
+row_size는 모든 컬럼 size의 합이며, 이후 모든 행 직렬화의 기준이 된다.
+
+### 3. INSERT
+
+```
+입력: "INSERT INTO users VALUES ('홍길동', 25)"
+  → parser: 값 문자열 파싱
+  → planner: ACCESS_PATH_INSERT 선택
+  → executor:
+      1. next_id 할당 (자동 증가)
+      2. row_value_t[] 구성 → row_serialize() → 바이트 버퍼
+      3. heap_insert(): 공간 있는 heap page 탐색 또는 신규 할당
+         ├── free slot chain에 빈 슬롯 있으면 재사용
+         └── 없으면 새 슬롯 추가 (앞에서 뒤로), 행 데이터는 페이지 끝에서 앞으로
+      4. bptree_insert(): B+ tree에 (key=id, value=row_ref) 삽입
+         ├── find_leaf()로 리프 탐색
+         ├── 공간 있으면 정렬 유지하며 삽입
+         └── 가득 차면 split_leaf() → promote key → insert_into_parent()
+      5. row_count++, next_id++
+```
+
+heap page의 slotted 구조는 다음과 같다:
+
+```
+[header][slot_0][slot_1]...[slot_N]   ← 앞에서 뒤로 증가
+                 [free space]
+[row_N]...[row_1][row_0]              ← 페이지 끝에서 앞으로 증가
+```
+
+### 4. SELECT (INDEX_LOOKUP)
+
+```
+입력: "SELECT * FROM users WHERE id = 1"
+  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_LOOKUP
+  → executor:
+      1. bptree_search(key=1): B+ tree에서 row_ref 획득
+         └── root → internal_child_for_key() → ... → leaf에서 binary search
+      2. heap_fetch(row_ref): 해당 페이지의 슬롯에서 행 데이터 읽기
+      3. row_deserialize() → 화면 출력
+```
+
+시간 복잡도: O(log n) — B+ tree 높이만큼 페이지 접근
+
+### 5. SELECT (TABLE_SCAN)
+
+```
+입력: "SELECT * FROM users WHERE name = '홍길동'"
+  → planner: PREDICATE_FIELD_EQ → ACCESS_PATH_TABLE_SCAN
+  → executor:
+      1. heap_scan(): 모든 heap page를 순회
+      2. 각 페이지의 모든 ALIVE 슬롯에 대해:
+         ├── row_deserialize()
+         ├── predicate 평가 (컬럼 값 비교)
+         └── 일치하면 출력
+```
+
+시간 복잡도: O(n) — 전체 행 순회
+
+### 6. DELETE
+
+```
+입력: "DELETE FROM users WHERE id = 1"
+  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_DELETE
+  → executor:
+      1. bptree_search(key=1) → row_ref 획득
+      2. heap_delete(row_ref):
+         ├── slot.status = SLOT_FREE
+         └── slot을 free_slot_head chain에 연결 (다음 INSERT에서 재사용)
+      3. bptree_delete(key=1):
+         ├── leaf에서 엔트리 제거
+         ├── underflow 시 fix_leaf_after_delete():
+         │   ├── 우측 형제에서 borrow 시도
+         │   ├── 좌측 형제에서 borrow 시도
+         │   └── merge (형제와 합병 + parent separator 제거)
+         └── root shrink: root가 0 키면 유일한 자식을 새 root로
+      4. row_count--
+```
+
+공간 재사용 3단계:
+
+| 단계 | 메커니즘 | 재사용 시점 |
+|------|---------|-----------|
+| 1단계 | free slot chain | 같은 heap page에 INSERT 시 |
+| 2단계 | free page list | merge로 빈 페이지 발생 시 pager_alloc_page()에서 재사용 |
+| 3단계 | 파일 축소 없음 | VACUUM FULL 미구현 (설계 결정) |
+
+### 7. 종료 (pager_close)
+
+```
+pager_close()
+  → pager_flush_all():
+      1. 모든 dirty frame을 pwrite()로 디스크에 기록
+      2. header를 page 0에 기록
+      3. fsync()로 OS 버퍼 강제 flush
+  → frame 메모리 해제
+  → fd close
+```
+
+
+## 코드 리뷰 가이드
+
+이 프로젝트의 코드를 리뷰할 때 아래 순서와 관점을 참고한다.
+
+### 권장 리뷰 순서
+
+1. `include/storage/page_format.h` — 모든 on-disk 구조체가 정의되어 있다. packed 속성, 타입 크기, 매직 넘버를 먼저 파악한다.
+2. `include/storage/pager.h` → `src/storage/pager.c` — 디스크 I/O의 핵심. frame cache, LRU, pin/unpin 흐름을 따라간다.
+3. `src/storage/schema.c` — 행 직렬화/역직렬화. offset 계산과 memcpy 경계를 확인한다.
+4. `src/storage/table.c` — slotted heap page. 슬롯 디렉토리가 앞에서 뒤로, 행 데이터가 뒤에서 앞으로 자라는 구조를 이해한다.
+5. `src/storage/bptree.c` — B+ tree 전체. insert → split → insert_into_parent 체인과 delete → fix_leaf → fix_internal 체인을 추적한다.
+6. `src/sql/parser.c` → `planner.c` → `executor.c` — SQL 처리 파이프라인. parser가 statement_t를 만들고, planner가 access_path를 결정하고, executor가 실행한다.
+7. `src/main.c` — REPL 루프와 메타 명령어.
+8. `tests/test_all.c` — 각 모듈의 정합성 테스트.
+
+### 리뷰 시 확인할 핵심 포인트
+
+**pager.c**
+
+- `pager_get_page()` 호출 후 반드시 `pager_unpin()`이 쌍으로 호출되는지 (pin leak 방지)
+- dirty page가 eviction 시 디스크에 쓰이는지
+- free page list가 순환 참조 없이 유지되는지
+
+**table.c**
+
+- `free_space_offset`이 슬롯 디렉토리 영역을 침범하지 않는지 (`available_space()` 로직)
+- free slot chain이 정상 연결/해제되는지
+- 삭제된 슬롯의 행 데이터 공간이 재사용 시 정확히 덮어쓰이는지
+
+**bptree.c**
+
+- split 시 promote key가 정확한지 (leaf: 첫 번째 right 키, internal: median)
+- merge 후 sibling pointer(prev/next_leaf_page_id)가 갱신되는지
+- parent_page_id가 split/merge 후 모든 자식에서 올바르게 갱신되는지
+- root shrink 조건이 정확한지 (key_count == 0일 때 leftmost_child를 새 root로)
+
+**executor.c**
+
+- DELETE 시 heap_delete()와 bptree_delete()가 항상 쌍으로 호출되는지
+- row_count 감소가 실제 삭제 건수와 일치하는지
+- TABLE_SCAN delete에서 scan 중 삭제하지 않고 id를 수집한 뒤 일괄 삭제하는지 (iterator invalidation 방지)
+
+### 알려진 한계
+
+- 단일 테이블만 지원한다.
+- internal 노드의 borrow/merge는 미구현이다 (leaf만 처리). 대량 삭제 시 internal 노드가 underfull 상태로 남을 수 있으나 정합성에는 영향 없다.
+- VARCHAR 비교는 바이트 단위 strcmp이다. UTF-8 collation은 지원하지 않는다.
+- 동시성 제어(lock/MVCC)는 없다. 단일 클라이언트 전용이다.
+- WAL(Write-Ahead Log)이 없으므로 flush 전 비정상 종료 시 데이터가 유실될 수 있다.
+
+
+## 설계 결정 요약
+
+| 항목 | 결정 | 이유 |
+|------|------|------|
+| 디스크 I/O | pread/pwrite | flush 시점 직접 제어, pager 학습 |
+| 페이지 크기 | sysconf(_SC_PAGESIZE) | OS 최적 크기 동적 로드 |
+| 공간 재사용 | tombstone + free slot + free page list | 3단계 공간 회수 |
+| 인덱스 | on-disk B+ tree | id 컬럼 자동 인덱싱 |
+| 플래너 | rule-based | id 조건 → INDEX, 그 외 → SCAN |
+| 저장 형식 | 단일 .db 파일 | 배포 단순화 |
+| flush 정책 | 종료/커밋 시 일괄 flush | fsync 호출 최소화 |
