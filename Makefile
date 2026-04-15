@@ -1,6 +1,10 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -Werror -g -Iinclude -fsanitize=address,undefined
+WARNFLAGS = -Wall -Wextra -Werror
+INCLUDES = -Iinclude
+CFLAGS  = $(WARNFLAGS) -g $(INCLUDES) -fsanitize=address,undefined
 LDFLAGS = -fsanitize=address,undefined -lpthread -lreadline
+GEN_CFLAGS = $(WARNFLAGS) -O2 -g $(INCLUDES) -DNDEBUG
+GEN_LDFLAGS =
 
 SRC_DIR   = src
 BUILD_DIR = build
@@ -38,7 +42,7 @@ $(BUILD_DIR)/test_all: $(TEST_SRC) $(OBJS)
 test: $(BUILD_DIR)/test_all
 	./$(BUILD_DIR)/test_all
 
-# 대량 데이터 생성기
+# 대량 데이터 생성기 (이미 빌드된 .o 파일을 링크)
 GEN_SRC = tools/gen_data.c
 $(BUILD_DIR)/gen_data: $(GEN_SRC) $(OBJS)
 	@mkdir -p $(BUILD_DIR)

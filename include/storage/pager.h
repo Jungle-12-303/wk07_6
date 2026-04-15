@@ -47,6 +47,7 @@ typedef struct {
     int         fd;                  /* DB 파일 디스크립터 */
     uint32_t    page_size;           /* 페이지 크기 (바이트) */
     db_header_t header;              /* DB 헤더 (page 0의 인메모리 사본) */
+    uint32_t    last_heap_page_id;   /* 마지막 힙 페이지 ID (순차 INSERT 최적화용 캐시) */
     frame_t     frames[MAX_FRAMES];  /* 페이지 프레임 배열 */
     uint64_t    tick;                /* 전역 틱 카운터 (LRU 추적용) */
     bool        header_dirty;        /* 헤더가 수정되었는지 여부 */
