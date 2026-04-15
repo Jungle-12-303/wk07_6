@@ -117,11 +117,6 @@ MiniDB의 B+ Tree는 메모리 포인터 기반 노드가 아니라 **페이지 
 - leaf가 꽉 차면 split 후 오른쪽 페이지의 첫 key를 부모로 승격한다.
 - 루트가 분할되면 새 internal root가 만들어지고 트리 높이가 1 증가한다.
 
-| 노드 타입  | 저장 데이터                                            | 목적                 |
-| ---------- | ------------------------------------------------------ | -------------------- |
-| `LEAF`     | `key`, `row_ref(page_id, slot_id)`                     | 실제 검색 결과 보관  |
-| `INTERNAL` | `key`, `right_child_page_id`, `leftmost_child_page_id` | 다음 페이지로 라우팅 |
-
 ```mermaid
 flowchart TD
     ROOT["root internal"]
