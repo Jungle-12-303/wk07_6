@@ -3,16 +3,28 @@
  *
  * 역할:
  *   플래너가 결정한 접근 경로(access path)에 따라 실제 데이터 조작을 수행한다.
- *   각 접근 경로별 전용 실행 함수가 있으며, execute()가 디스패치한다.
  *
- * 실행 흐름:
- *   execute() → planner_create_plan() → 접근 경로에 따라 분기
- *     CREATE_TABLE  → exec_create_table()  : 스키마 정의
- *     INSERT        → exec_insert()        : 행 직렬화 → 힙 삽입 → B+ tree 삽입
- *     INDEX_LOOKUP  → exec_index_lookup()  : B+ tree 검색 → 힙 조회
- *     TABLE_SCAN    → exec_table_scan()    : 힙 전체 스캔
- *     INDEX_DELETE  → exec_index_delete()  : B+ tree 검색 → 힙 삭제 → 인덱스 삭제
- *     TABLE_SCAN(삭제) → exec_delete_scan(): 힙 스캔 → id 수집 → 일괄 삭제
+ * 전체 실행 흐름 예시 (INSERT INTO users VALUES ('Alice', 25)):
+ *
+ *   1. parse() → stmt = {type=INSERT, table_name="users", values=["Alice","25"]}
+ *   2. execute() → planner_create_plan() → ACCESS_PATH_INSERT
+ *   3. exec_insert() 호출:
+ *      a. id = next_id = 1 (자동 할당)
+ *      b. values[0].bigint_val = 1     (id)
+ *         values[1].str_val = "Alice"  (name)
+ *         values[2].int_val = 25       (age)
+ *      c. row_serialize() → 44바이트 버퍼 생성
+ *      d. heap_insert() → row_ref_t {page_id=1, slot_id=0} 획득
+ *      e. bptree_insert(key=1, ref={1,0}) → B+ tree에 등록
+ *      f. next_id=2, row_count=1 갱신
+ *
+ * 접근 경로별 실행 함수:
+ *   CREATE_TABLE  → exec_create_table()  : 스키마 정의
+ *   INSERT        → exec_insert()        : 힙 삽입 + B+ tree 삽입
+ *   INDEX_LOOKUP  → exec_index_lookup()  : B+ tree O(log n) 조회
+ *   TABLE_SCAN    → exec_table_scan()    : 힙 O(n) 전체 스캔
+ *   INDEX_DELETE  → exec_index_delete()  : B+ tree로 찾아 삭제
+ *   TABLE_SCAN(삭제) → exec_delete_scan(): 스캔 후 2-pass 일괄 삭제
  */
 
 #include "sql/executor.h"
@@ -24,7 +36,13 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-/* 행 데이터를 컬럼별로 포맷하여 출력한다 */
+/*
+ * print_row - 행 데이터를 컬럼별로 포맷하여 출력한다.
+ *
+ * 예시: columns = [id BIGINT, name VARCHAR(32), age INT]
+ *       values = [1, "Alice", 25]
+ *       출력: "1 | Alice | 25"
+ */
 static void print_row(const db_header_t *hdr, const row_value_t *values)
 {
     for (uint16_t i = 0; i < hdr->column_count; i++) {
@@ -47,7 +65,14 @@ static void print_row(const db_header_t *hdr, const row_value_t *values)
     printf("\n");
 }
 
-/* 컬럼 이름과 구분선을 출력한다 */
+/*
+ * print_header - 컬럼 이름과 구분선을 출력한다.
+ *
+ * 예시: columns = [id, name, age]
+ *       출력:
+ *         id | name | age
+ *         ----------+-----------+----------
+ */
 static void print_header(const db_header_t *hdr)
 {
     for (uint16_t i = 0; i < hdr->column_count; i++) {
@@ -68,17 +93,20 @@ static void print_header(const db_header_t *hdr)
     printf("\n");
 }
 
-/* ── CREATE TABLE ── */
-
-/*
- * 테이블을 생성한다.
+/* ══════════════════════════════════════════════════════════════════════
+ *  CREATE TABLE
  *
- * id BIGINT 컬럼을 시스템 컬럼으로 자동 추가한 뒤,
- * 사용자가 정의한 컬럼들을 순서대로 등록한다.
- * schema_compute_layout()으로 각 컬럼의 바이트 오프셋을 계산한다.
+ *  예시: CREATE TABLE users (name VARCHAR(32), age INT)
  *
- * 현재 단일 테이블만 지원하며, 이미 테이블이 있으면 오류를 반환한다.
- */
+ *  결과 (DB 헤더에 저장):
+ *    columns[0] = {name="id",   type=BIGINT,     size=8,  offset=0,  is_system=1}
+ *    columns[1] = {name="name", type=VARCHAR(32), size=32, offset=8,  is_system=0}
+ *    columns[2] = {name="age",  type=INT,         size=4,  offset=40, is_system=0}
+ *    column_count = 3, row_size = 44
+ *
+ *  id는 시스템 컬럼으로 자동 추가된다 (사용자가 명시해도 건너뜀).
+ *  현재 단일 테이블만 지원하며, 이미 테이블이 있으면 오류를 반환한다.
+ * ══════════════════════════════════════════════════════════════════════ */
 static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
@@ -91,7 +119,7 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
         return res;
     }
 
-    /* id를 첫 번째 시스템 컬럼으로 추가 */
+    /* id를 첫 번째 시스템 컬럼으로 추가 (BIGINT 8바이트) */
     hdr->column_count = 0;
     column_meta_t *id_col = &hdr->columns[hdr->column_count++];
     memset(id_col, 0, sizeof(*id_col));
@@ -115,7 +143,11 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
         col->is_system = 0;
     }
 
-    /* 컬럼 오프셋 계산 및 row_size 결정 */
+    /*
+     * 컬럼 오프셋 계산
+     * schema_compute_layout()이 각 컬럼의 offset을 누적 계산하고 row_size를 설정한다.
+     * 예: [8, 32, 4] → offsets=[0, 8, 40], row_size=44
+     */
     schema_compute_layout(hdr);
     pager->header_dirty = true;
 
@@ -125,19 +157,19 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* ── INSERT ── */
-
-/*
- * 행을 삽입한다.
+/* ══════════════════════════════════════════════════════════════════════
+ *  INSERT
  *
- * 과정:
- *   1. id를 next_id로 자동 할당
- *   2. 사용자 값을 컬럼 타입에 맞게 row_value_t에 저장
- *   3. row_serialize()로 바이트 버퍼 생성
- *   4. heap_insert()로 힙에 저장 → row_ref_t 획득
- *   5. bptree_insert()로 B+ tree에 (id → row_ref_t) 매핑 등록
- *   6. next_id 및 row_count 갱신
- */
+ *  예시: INSERT INTO users VALUES ('Alice', 25)
+ *
+ *  실행 과정:
+ *    1. id = next_id = 1 (자동 할당)
+ *    2. values[0] = id(1), values[1] = "Alice", values[2] = 25
+ *    3. row_serialize() → 44바이트 버퍼: [01 00...][Alice\0...][19 00 00 00]
+ *    4. heap_insert(row_buf) → ref = {page_id=1, slot_id=0}
+ *    5. bptree_insert(key=1, ref={1,0})
+ *    6. next_id = 2, row_count = 1
+ * ══════════════════════════════════════════════════════════════════════ */
 static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
@@ -155,7 +187,14 @@ static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
     /* id는 자동 증가 값으로 설정 */
     values[0].bigint_val = (int64_t)hdr->next_id;
 
-    /* 사용자 입력 값을 비시스템 컬럼에 매핑 */
+    /*
+     * 사용자 입력 값을 비시스템 컬럼에 매핑한다.
+     * 컬럼 0(id)은 건너뛰고, 컬럼 1부터 사용자 값을 순서대로 넣는다.
+     *
+     * 예시: columns = [id, name, age], values_input = ["Alice", "25"]
+     *   values[1].str_val = "Alice"  (VARCHAR → strncpy)
+     *   values[2].int_val = 25       (INT → atoi)
+     */
     uint16_t val_idx = 0;
     for (uint16_t i = 1; i < hdr->column_count && val_idx < stmt->insert_value_count; i++) {
         const column_meta_t *col = &hdr->columns[i];
@@ -196,9 +235,53 @@ static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* ── SELECT ── */
+/* ══════════════════════════════════════════════════════════════════════
+ *  SELECT — INDEX_LOOKUP (B+ tree O(log n) 단건 조회)
+ *
+ *  예시: SELECT * FROM users WHERE id = 3
+ *
+ *  실행 과정:
+ *    1. bptree_search(key=3) → ref = {page_id=1, slot_id=2}
+ *    2. heap_fetch(ref) → 44바이트 행 데이터 포인터
+ *    3. row_deserialize() → values = [3, "Charlie", 30]
+ *    4. print_header() + print_row()
+ *
+ *  시간 복잡도: O(log n) — 100만 건에서도 3~4번의 페이지 접근
+ * ══════════════════════════════════════════════════════════════════════ */
 
-/* 테이블 스캔 콜백에서 사용하는 컨텍스트 */
+/*
+ * match_predicate - WHERE 절 조건과 행 값을 비교한다.
+ *
+ * PREDICATE_FIELD_EQ일 때 pred_field 컬럼의 값이 pred_value와 일치하면 true.
+ * PREDICATE_NONE이면 항상 true (무조건 일치).
+ *
+ * 예시: WHERE name = 'Alice'
+ *   pred_field="name", pred_value="Alice"
+ *   → columns[1].name == "name" → strcmp(values[1].str_val, "Alice") → match
+ */
+static bool match_predicate(const db_header_t *hdr, const row_value_t *values,
+                            const statement_t *stmt)
+{
+    if (stmt->predicate_kind != PREDICATE_FIELD_EQ) {
+        return true; /* WHERE 없음 → 모든 행 일치 */
+    }
+    for (uint16_t i = 0; i < hdr->column_count; i++) {
+        if (strncmp(hdr->columns[i].name, stmt->pred_field, 32) != 0) {
+            continue;
+        }
+        switch (hdr->columns[i].type) {
+            case COL_TYPE_INT:
+                return values[i].int_val == atoi(stmt->pred_value);
+            case COL_TYPE_BIGINT:
+                return values[i].bigint_val == atoll(stmt->pred_value);
+            case COL_TYPE_VARCHAR:
+                return strcmp(values[i].str_val, stmt->pred_value) == 0;
+        }
+    }
+    return false; /* 해당 컬럼이 없으면 불일치 */
+}
+
+/* SELECT의 테이블 스캔 콜백에서 사용하는 컨텍스트 */
 typedef struct {
     pager_t *pager;
     const statement_t *stmt;
@@ -206,8 +289,9 @@ typedef struct {
 } scan_ctx_t;
 
 /*
- * SELECT의 테이블 스캔 콜백.
- * 각 행에 대해 조건(predicate)을 검사하고, 일치하면 출력한다.
+ * select_scan_cb - SELECT의 테이블 스캔 콜백
+ *
+ * 각 행에 대해 match_predicate()로 조건 검사 후 일치하면 출력한다.
  */
 static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
 {
@@ -218,28 +302,8 @@ static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
     row_value_t values[MAX_COLUMNS];
     row_deserialize(hdr, row_data, values);
 
-    /* WHERE 절이 있으면 조건 검사 */
-    if (sc->stmt->predicate_kind == PREDICATE_FIELD_EQ) {
-        for (uint16_t i = 0; i < hdr->column_count; i++) {
-            if (strncmp(hdr->columns[i].name, sc->stmt->pred_field, 32) == 0) {
-                bool match = false;
-                switch (hdr->columns[i].type) {
-                    case COL_TYPE_INT:
-                        match = (values[i].int_val == atoi(sc->stmt->pred_value));
-                        break;
-                    case COL_TYPE_BIGINT:
-                        match = (values[i].bigint_val == atoll(sc->stmt->pred_value));
-                        break;
-                    case COL_TYPE_VARCHAR:
-                        match = (strcmp(values[i].str_val, sc->stmt->pred_value) == 0);
-                        break;
-                }
-                if (match == false) {
-                    return true; /* 조건 불일치, 다음 행으로 계속 */
-                }
-                break;
-            }
-        }
+    if (!match_predicate(hdr, values, sc->stmt)) {
+        return true; /* 조건 불일치, 다음 행으로 계속 */
     }
 
     /* 첫 번째 결과 행 출력 전에 헤더를 출력 */
@@ -251,21 +315,19 @@ static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
     return true;
 }
 
-/*
- * B+ tree 인덱스를 사용한 단건 조회.
- * WHERE id = N 조건에서 B+ tree로 row_ref_t를 찾고, 힙에서 행을 읽는다.
- */
 static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
     db_header_t *hdr = &pager->header;
 
+    /* B+ tree에서 id로 검색 → 힙 위치(row_ref_t) 획득 */
     row_ref_t ref;
     if (bptree_search(pager, stmt->pred_id, &ref) == false) {
         snprintf(res.message, sizeof(res.message), "오류: id=%" PRIu64 "인 행을 찾을 수 없습니다", stmt->pred_id);
         return res;
     }
 
+    /* 힙에서 행 데이터 읽기 */
     const uint8_t *row_data = heap_fetch(pager, ref, hdr->row_size);
     if (row_data == NULL) {
         res.status = -1;
@@ -283,7 +345,18 @@ static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* 힙 전체 스캔으로 조건에 맞는 행을 조회한다 */
+/* ══════════════════════════════════════════════════════════════════════
+ *  SELECT — TABLE_SCAN (힙 O(n) 전체 스캔)
+ *
+ *  예시: SELECT * FROM users WHERE name = 'Alice'
+ *
+ *  실행 과정:
+ *    1. heap_scan() 호출 → 모든 힙 페이지를 순회
+ *    2. 각 행에 대해 select_scan_cb() 호출
+ *    3. name 컬럼에서 'Alice'와 일치하는 행만 출력
+ *
+ *  시간 복잡도: O(n) — 전체 행을 읽어야 하므로 느림
+ * ══════════════════════════════════════════════════════════════════════ */
 static exec_result_t exec_table_scan(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
@@ -293,7 +366,17 @@ static exec_result_t exec_table_scan(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* ── DELETE ── */
+/* ══════════════════════════════════════════════════════════════════════
+ *  DELETE — INDEX_DELETE (B+ tree O(log n) 단건 삭제)
+ *
+ *  예시: DELETE FROM users WHERE id = 3
+ *
+ *  실행 과정:
+ *    1. bptree_search(key=3) → ref = {page_id=1, slot_id=2}
+ *    2. heap_delete(ref) → slot_2.status = FREE (톰스톤)
+ *    3. bptree_delete(key=3) → B+ tree에서 엔트리 제거
+ *    4. row_count-- 갱신
+ * ══════════════════════════════════════════════════════════════════════ */
 
 /* DELETE 테이블 스캔 콜백에서 사용하는 컨텍스트 */
 typedef struct {
@@ -306,9 +389,13 @@ typedef struct {
 } delete_scan_ctx_t;
 
 /*
- * DELETE의 테이블 스캔 콜백.
- * 조건에 일치하는 행의 id를 수집한다 (스캔 중에는 삭제하지 않음).
- * 스캔 완료 후 일괄 삭제하는 2-pass 방식이다.
+ * delete_scan_cb - DELETE의 테이블 스캔 콜백
+ *
+ * match_predicate()로 조건 검사 후 일치하는 행의 id를 수집한다.
+ * 스캔 중 직접 삭제하면 이터레이터가 깨질 수 있으므로 2-pass 방식이다.
+ *
+ * 1차 (이 콜백): id 수집
+ * 2차 (exec_delete_scan): 수집된 id로 일괄 삭제
  */
 static bool delete_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
 {
@@ -319,40 +406,21 @@ static bool delete_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
     row_value_t values[MAX_COLUMNS];
     row_deserialize(hdr, row_data, values);
 
-    /* 조건에 일치하는 행의 id를 수집 */
-    for (uint16_t i = 0; i < hdr->column_count; i++) {
-        if (strncmp(hdr->columns[i].name, dc->stmt->pred_field, 32) == 0) {
-            bool match = false;
-            switch (hdr->columns[i].type) {
-                case COL_TYPE_INT:
-                    match = (values[i].int_val == atoi(dc->stmt->pred_value));
-                    break;
-                case COL_TYPE_BIGINT:
-                    match = (values[i].bigint_val == atoll(dc->stmt->pred_value));
-                    break;
-                case COL_TYPE_VARCHAR:
-                    match = (strcmp(values[i].str_val, dc->stmt->pred_value) == 0);
-                    break;
-            }
-            if (match) {
-                /* 배열 용량 부족 시 2배로 확장 */
-                if (dc->ids_len >= dc->ids_cap) {
-                    dc->ids_cap = dc->ids_cap ? dc->ids_cap * 2 : 64;
-                    dc->ids_to_delete = realloc(dc->ids_to_delete,
-                                                dc->ids_cap * sizeof(uint64_t));
-                }
-                dc->ids_to_delete[dc->ids_len++] = values[0].bigint_val;
-            }
-            break;
-        }
+    if (!match_predicate(hdr, values, dc->stmt)) {
+        return true; /* 조건 불일치, 다음 행으로 계속 */
     }
+
+    /* 배열 용량 부족 시 2배로 확장 (초기 64개) */
+    if (dc->ids_len >= dc->ids_cap) {
+        dc->ids_cap = dc->ids_cap ? dc->ids_cap * 2 : 64;
+        dc->ids_to_delete = realloc(dc->ids_to_delete,
+                                    dc->ids_cap * sizeof(uint64_t));
+    }
+    /* id는 항상 columns[0] (BIGINT) */
+    dc->ids_to_delete[dc->ids_len++] = values[0].bigint_val;
     return true;
 }
 
-/*
- * B+ tree 인덱스를 사용한 단건 삭제.
- * WHERE id = N 조건에서 B+ tree로 위치를 찾고, 힙과 인덱스에서 모두 삭제한다.
- */
 static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
@@ -363,6 +431,7 @@ static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
         return res;
     }
 
+    /* 힙 삭제 (톰스톤) + B+ tree 삭제 */
     heap_delete(pager, ref);
     bptree_delete(pager, stmt->pred_id);
     pager->header.row_count--;
@@ -372,15 +441,21 @@ static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/*
- * 테이블 스캔으로 조건에 맞는 행을 일괄 삭제한다.
+/* ══════════════════════════════════════════════════════════════════════
+ *  DELETE — TABLE_SCAN (2-pass 일괄 삭제)
  *
- * 2-pass 방식:
- *   1차: 힙 스캔으로 조건 일치하는 행의 id를 수집
- *   2차: 수집된 id를 순회하며 B+ tree 검색 → 힙 삭제 → 인덱스 삭제
+ *  예시: DELETE FROM users WHERE name = 'Alice'
  *
- * 스캔 중에 직접 삭제하면 이터레이터가 깨질 수 있으므로 분리한다.
- */
+ *  실행 과정 (2-pass):
+ *    1차: heap_scan → 조건 일치하는 행의 id를 배열에 수집
+ *         → ids_to_delete = [1, 5, 12]
+ *    2차: 수집된 id를 순회하며:
+ *         bptree_search(id) → ref 획득
+ *         heap_delete(ref)  → 톰스톤 삭제
+ *         bptree_delete(id) → 인덱스 삭제
+ *
+ *  스캔 중 직접 삭제하면 힙 체인 순회가 깨질 수 있으므로 분리한다.
+ * ══════════════════════════════════════════════════════════════════════ */
 static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt)
 {
     exec_result_t res = {0, ""};
@@ -409,12 +484,18 @@ static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* ── EXPLAIN ── */
-
-/*
- * EXPLAIN 명령을 실행한다.
- * 실제 데이터 조작 없이 실행 계획(접근 경로)만 출력한다.
- */
+/* ══════════════════════════════════════════════════════════════════════
+ *  EXPLAIN
+ *
+ *  예시: EXPLAIN SELECT * FROM users WHERE id = 3
+ *
+ *  출력:
+ *    Access Path: INDEX_LOOKUP
+ *      Index: B+ Tree (id)
+ *      Target: id = 3
+ *
+ *  실제 데이터 조작은 수행하지 않고 실행 계획만 출력한다.
+ * ══════════════════════════════════════════════════════════════════════ */
 static exec_result_t exec_explain(pager_t *pager, statement_t *stmt)
 {
     (void)pager;
@@ -438,12 +519,22 @@ static exec_result_t exec_explain(pager_t *pager, statement_t *stmt)
     return res;
 }
 
-/* ── 메인 디스패치 ── */
-
-/*
- * SQL 문을 실행한다.
- * 플래너에서 접근 경로를 결정하고, 해당 실행 함수로 분기한다.
- */
+/* ══════════════════════════════════════════════════════════════════════
+ *  메인 디스패치
+ *
+ *  execute()는 플래너에서 접근 경로를 결정하고, 해당 실행 함수로 분기한다.
+ *
+ *  흐름:
+ *    execute(stmt)
+ *      → EXPLAIN이면 exec_explain()
+ *      → 아니면 planner_create_plan(stmt)
+ *      → switch(access_path):
+ *          CREATE_TABLE → exec_create_table()
+ *          INSERT       → exec_insert()
+ *          INDEX_LOOKUP → exec_index_lookup()
+ *          TABLE_SCAN   → exec_table_scan() 또는 exec_delete_scan()
+ *          INDEX_DELETE → exec_index_delete()
+ * ══════════════════════════════════════════════════════════════════════ */
 exec_result_t execute(pager_t *pager, statement_t *stmt)
 {
     /* EXPLAIN은 별도 처리 */

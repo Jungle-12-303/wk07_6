@@ -5,16 +5,27 @@
  *   사용자로부터 SQL 또는 메타 명령어를 입력받아 실행하는 인터랙티브 셸이다.
  *   GNU readline을 사용하여 방향키 이동, 히스토리(↑↓) 등 터미널 편의 기능을 지원한다.
  *
- * 명령어 흐름:
- *   1. readline()으로 입력 받기
- *   2. '.'으로 시작하면 메타 명령어 (.exit, .btree, .pages, .stats)
- *   3. 그 외는 SQL로 간주 → parse() → execute()
+ * 명령어 처리 흐름:
  *
- * 메타 명령어:
+ *   사용자 입력: "INSERT INTO users VALUES ('Alice', 25)"
+ *     1. readline("minidb> ") → 문자열 입력
+ *     2. add_history() → ↑↓ 히스토리에 추가
+ *     3. line[0] == '.' → 메타 명령어 체크 (아니므로 패스)
+ *     4. parse(line, &stmt) → statement_t 생성
+ *     5. execute(&pager, &stmt) → 실행 및 결과 출력
+ *     6. free(line) → readline이 malloc한 메모리 해제
+ *
+ * 메타 명령어 (디버그/관리용):
  *   .exit / .quit  — 프로그램 종료
- *   .btree         — B+ tree 구조 출력 (디버그용)
- *   .pages         — 페이지 유형별 통계 출력
- *   .stats         — DB 전체 통계 출력
+ *   .btree         — B+ tree 구조 출력 (노드별 키 목록)
+ *   .pages         — 페이지 유형별 개수 통계
+ *   .stats         — DB 전체 통계 (행 수, 페이지 크기, 트리 높이 등)
+ *   .log           — pager 플러시 로그 ON/OFF 토글
+ *   .flush         — 모든 dirty 페이지를 수동으로 디스크에 기록
+ *
+ * 사용법: ./minidb [데이터베이스 파일 경로]
+ *   기본값: test.db
+ *   파일이 없으면 새로 생성, 있으면 기존 DB를 연다.
  */
 
 #include "sql/parser.h"
@@ -29,13 +40,33 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
-/* B+ tree 구조를 출력한다 */
+/*
+ * cmd_btree - B+ tree 구조를 출력한다.
+ *
+ * 예시 출력:
+ *   [internal] page 4: keys=[30]
+ *     [leaf] page 2: keys=[10, 20]
+ *     [leaf] page 3: keys=[30, 40]
+ */
 static void cmd_btree(pager_t *pager)
 {
     bptree_print(pager);
 }
 
-/* 페이지 유형별 개수를 집계하여 출력한다 */
+/*
+ * cmd_pages - 페이지 유형별 개수를 집계하여 출력한다.
+ *
+ * page 1부터 next_page_id-1까지 순회하며 첫 4바이트(page_type)를 읽어 분류한다.
+ *
+ * 예시 출력 (next_page_id=8):
+ *   전체 페이지: 8
+ *     HEADER:   1
+ *     HEAP:     2
+ *     LEAF:     3
+ *     INTERNAL: 1
+ *     FREE:     1
+ *   빈 페이지 목록: 7
+ */
 static void cmd_pages(pager_t *pager)
 {
     db_header_t *hdr = &pager->header;
@@ -86,7 +117,23 @@ static void cmd_pages(pager_t *pager)
     }
 }
 
-/* DB 통계 정보를 출력한다 */
+/*
+ * cmd_stats - DB 통계 정보를 출력한다.
+ *
+ * 예시 출력:
+ *   행 수: 100 (live)
+ *   다음 ID: 101
+ *   페이지 크기: 4096
+ *   행 크기: 44
+ *   페이지당 행 수: ~80
+ *   전체 페이지: 8
+ *   B+ Tree 높이: 2
+ *   빈 페이지 헤드: 0
+ *
+ * 페이지당 행 수 계산:
+ *   (page_size - heap_header) / (row_size + slot_size)
+ *   = (4096 - 16) / (44 + 8) = 4080 / 52 ≈ 78
+ */
 static void cmd_stats(pager_t *pager)
 {
     db_header_t *hdr = &pager->header;
@@ -105,12 +152,13 @@ static void cmd_stats(pager_t *pager)
 }
 
 /*
- * 프로그램 진입점.
+ * main - 프로그램 진입점
  *
- * 사용법: ./minidb [데이터베이스 파일 경로]
- * 기본값: test.db
- *
- * 파일이 존재하면 기존 DB를 열고, 없으면 새로 생성한다.
+ * 흐름:
+ *   1. DB 파일 존재 여부 확인 (fopen으로 체크)
+ *   2. pager_open()으로 DB 열기 (없으면 create=true)
+ *   3. REPL 루프: readline → 파싱 → 실행 → 반복
+ *   4. .exit 또는 EOF(Ctrl+D) → pager_close()로 flush 후 종료
  */
 int main(int argc, char **argv)
 {
@@ -140,7 +188,7 @@ int main(int argc, char **argv)
     /* REPL: readline으로 입력을 받아 반복 실행 */
     char *line;
     while ((line = readline("minidb> ")) != NULL) {
-        /* 줄바꿈 문자 제거 (readline은 보통 제거하지만 안전 처리) */
+        /* 줄바꿈 문자 제거 */
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[--len] = '\0';
@@ -173,6 +221,18 @@ int main(int argc, char **argv)
             }
             if (strcmp(line, ".stats") == 0) {
                 cmd_stats(&pager);
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ".log") == 0) {
+                pager.log_flushes = !pager.log_flushes;
+                printf("pager 로그: %s\n", pager.log_flushes ? "ON" : "OFF");
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ".flush") == 0) {
+                pager_flush_all(&pager);
+                printf("모든 dirty 페이지를 디스크에 기록했습니다.\n");
                 free(line);
                 continue;
             }
