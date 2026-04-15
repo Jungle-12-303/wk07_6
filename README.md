@@ -326,6 +326,116 @@ pager는 MAX_FRAMES(256)개의 frame을 메모리에 할당한다. 각 frame은 
 모든 페이지 접근은 `pager_get_page()`를 통해 frame cache를 거친다.
 cache miss 시 LRU eviction으로 가장 오래된 unpinned frame을 교체하고, dirty면 디스크에 먼저 쓴다.
 
+### 페이지 레이아웃
+
+모든 페이지는 `page_size` 바이트의 고정 크기를 가지며, 페이지 타입에 따라 내부 레이아웃이 달라진다.
+핵심 구조체 정의는 `include/storage/page_format.h`에 있다.
+
+새 DB 생성 직후의 기본 페이지 구성은 다음과 같다.
+
+```text
+page 0 : DB 헤더 페이지
+page 1 : 첫 heap 페이지
+page 2 : B+ tree 루트 leaf 페이지
+```
+
+#### 1. 헤더 페이지 (`page 0`)
+
+헤더 페이지는 데이터베이스 전체 메타데이터를 저장한다.
+
+```text
+[db_header_t][남은 빈 공간]
+```
+
+주요 필드:
+
+- `magic`: 이 파일이 MiniDB 파일인지 식별
+- `version`: DB 파일 포맷 버전
+- `page_size`: 페이지 크기
+- `root_index_page_id`: B+ tree 루트 페이지 번호
+- `first_heap_page_id`: 첫 heap 페이지 번호
+- `next_page_id`: 다음 할당할 페이지 번호
+- `free_page_head`: free page list의 시작
+- `next_id`: 다음 자동 증가 id
+- `row_count`: 현재 살아 있는 행 수
+- `column_count`, `row_size`, `columns[]`: 테이블 스키마 정보
+
+즉 header page는 "DB 전체 설명서" 역할을 한다.
+
+#### 2. 힙 페이지 (`PAGE_TYPE_HEAP`)
+
+힙 페이지는 실제 row 데이터를 저장한다.
+
+```text
+[heap_page_header_t][slot_0][slot_1]...[slot_N]  ← 앞에서 뒤로 증가
+                   [free space]
+[row_N]...[row_1][row_0]                         ← 페이지 끝에서 앞으로 증가
+```
+
+구성 요소:
+
+- `heap_page_header_t`
+  페이지 타입, 다음 heap 페이지 번호, 슬롯 개수, free slot chain 시작점 등
+- `slot_t` 배열
+  각 row가 페이지 안의 어느 offset에 저장되어 있는지 가리킴
+- row 데이터 영역
+  `row_serialize()`된 실제 행 바이트 저장
+
+즉 heap page는 "실제 데이터 창고"다.
+
+#### 3. 리프 페이지 (`PAGE_TYPE_LEAF`)
+
+리프 페이지는 인덱스의 말단 노드로, `key -> row_ref` 매핑을 저장한다.
+
+```text
+[leaf_page_header_t][leaf_entry_t * N][빈 공간]
+```
+
+예시:
+
+```text
+key = 100 -> row_ref(page 11, slot 0)
+key = 120 -> row_ref(page 11, slot 1)
+key = 150 -> row_ref(page 12, slot 3)
+```
+
+즉 리프 페이지는 "id를 실제 row 위치로 연결하는 인덱스 결과표"다.
+
+#### 4. 내부 페이지 (`PAGE_TYPE_INTERNAL`)
+
+내부 페이지는 B+ tree 탐색 중간에 사용하는 라우팅 노드다.
+실제 row는 저장하지 않고, 어떤 key가 어느 자식 페이지 범위로 가야 하는지만 저장한다.
+
+```text
+[internal_page_header_t][internal_entry_t * N][빈 공간]
+```
+
+예시:
+
+```text
+leftmost_child = page 2
+key = 100 -> right_child = page 5
+key = 200 -> right_child = page 7
+```
+
+의미:
+
+- `key < 100` 이면 `page 2`
+- `100 <= key < 200` 이면 `page 5`
+- `200 <= key` 이면 `page 7`
+
+즉 internal page는 "어느 leaf 방향으로 내려갈지 정하는 길 안내표"다.
+
+#### 5. free 페이지 (`PAGE_TYPE_FREE`)
+
+삭제나 merge 이후 반납된 페이지는 free page list에 연결된다.
+
+```text
+[free_page_header_t][남은 빈 공간]
+```
+
+`free_page_header_t`에는 현재 페이지가 free 상태임을 나타내는 타입과, 다음 free 페이지 번호가 저장된다.
+
 ### 2. CREATE TABLE
 
 ```
