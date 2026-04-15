@@ -8,9 +8,14 @@
 
 추가로 이번 주 구현은 아래 전제를 가진다.
 
-- 6주차 구현물은 구조 참고만 하고, 코드는 가져오지 않는다.
-- 처음부터 다시 만들되, parser / planner / executor / pager / heap / B+ tree
+- 저장 엔진(pager, heap, B+ tree)은 처음부터 새로 만든다.
+- parser는 6주차 구조를 참고하되, 이번 과제에 필요한 최소 문법으로 간소화한다.
+  parser는 이번 과제의 핵심이 아니라 저장 엔진이 핵심이므로,
+  parser에 시간을 과도하게 쓰지 않는다.
+- parser / planner / executor / pager / heap / B+ tree
   경계를 명확히 드러내는 것을 우선한다.
+- 팀 분업이 아니라, 1인 또는 전원이 같은 프롬프트로 전체를 함께 만든다.
+  목표는 "분업으로 빠르게 완성"이 아니라 "전 과정을 이해하며 구현"이다.
 
 따라서 이번 구현의 중심은 아래 두 가지다.
 
@@ -205,8 +210,8 @@ typedef struct {
     uint32_t page_size;
     uint32_t root_index_page_id;
     uint32_t first_heap_page_id;
-    uint32_t last_heap_page_id;
     uint32_t next_page_id;
+    uint32_t free_page_head;
     uint64_t next_id;
     uint64_t row_count;
 } db_header_t;
@@ -552,6 +557,11 @@ tests/
 
 ## 14. 구현 단계
 
+아래는 큰 단위 5단계로 정리한 것이다.
+실제 구현 순서는 7단계로 세분화한
+[week7-bptree-sql-blueprint.md](../../plans/week7-bptree-sql-blueprint.md) 를 따른다.
+blueprint에는 각 단계별 "이 단계에서 이해할 것"과 malloc 연결 포인트가 포함되어 있다.
+
 ### 1단계. DB 파일 열기/생성
 
 - `.db` 파일이 없으면 새로 만든다.
@@ -639,7 +649,7 @@ tests/
 - free slot / free page 재사용
 - parser / planner / executor 분리 이유
 
-### 15.2 팀이 먼저 합의해야 할 것
+### 15.2 구현 전에 확정할 것
 
 - row schema를 고정 길이로 어떻게 잡을 것인가
 - 이번 주를 단일 테이블 중심으로 고정할 것인가
@@ -805,7 +815,43 @@ tests/
 "메모리 친화적 저장 엔진을 만들었다"고 말할 수 있는
 가장 설득력 있는 구현 범위다.
 
-## 20. 구현 착수 체크리스트
+## 20. B+ Tree와 디스크 page의 관계
+
+이번 과제에서 가장 중요한 개념적 연결이다.
+상세 설명은 [why-bptree-and-disk-pages.md](./why-bptree-and-disk-pages.md) 에 별도 정리했다.
+
+핵심만 요약하면 아래와 같다.
+
+### DB의 성능은 파일을 몇 번 읽느냐로 결정된다
+
+100만 건, row 128바이트 기준:
+
+- Table Scan: heap page 약 33,334개를 전부 읽어야 한다.
+- B+ Tree: root → internal → leaf → heap = page 4개만 읽으면 된다.
+
+### B+ Tree의 노드 = 파일의 page
+
+메모리 기반 B+ Tree는 자식을 포인터로 가리킨다.
+디스크 기반 B+ Tree는 자식을 page 번호로 가리킨다.
+
+포인터는 프로그램 종료 시 사라지지만,
+page 번호는 파일에 영구 보존된다.
+
+### fan-out이 핵심이다
+
+B+ Tree 노드 하나(= page 하나)에 key가 수백 개 들어간다.
+이 fan-out 덕분에 100만 건도 높이 3으로 커버된다.
+
+BST는 fan-out이 2라서 높이가 20이다.
+같은 100만 건에서 page 20개 vs 3개.
+
+### malloc 경험과의 연결
+
+- page 할당 = `malloc()`, page 반환 = `free()`
+- free page list = explicit free list
+- split = 새 블록 할당, merge = 인접 블록 합치기
+
+## 21. 구현 착수 체크리스트
 
 - [ ] DB header struct 정의
 - [ ] page type enum 정의

@@ -117,6 +117,33 @@ flowchart LR
 - table scan 시 메모리 접근 패턴이 예측 가능하다.
 - B+ 트리 fan-out이 커져서 height가 낮아진다.
 
+### malloc 구현 경험과의 직접 연결
+
+이번 주 과제에서는 malloc 과제에서 배운 개념이 직접 적용된다.
+
+| malloc 과제 | DB 저장 엔진 | 같은 원리 |
+|-------------|-------------|-----------|
+| `mm_malloc(size)` | `pager_alloc_page()` | free list에서 빈 단위를 찾아 반환 |
+| `mm_free(ptr)` | `pager_free_page(page_id)` | 단위를 free list에 반환 |
+| explicit free list | free page list | 빈 단위를 체인으로 연결 |
+| coalescing (인접 합치기) | B+ tree merge | 인접 블록/노드를 합쳐 공간 확보 |
+| block split | B+ tree split / page 분할 | 꽉 찬 단위를 나누기 |
+| header (size, alloc bit) | page header (type, key_count) | 단위 앞에 메타정보 배치 |
+| alignment (8바이트 정렬) | page 정렬 (4096바이트) | 단위 크기에 맞춘 정렬 |
+| fragmentation (단편화) | tombstone 누적 | 삭제 후 사용 불가 공간 증가 |
+| sbrk()로 heap 확장 | 파일 끝에 page 추가 | 공간이 부족하면 확장 |
+
+이 연결을 의식하면서 구현하면,
+"왜 이렇게 만들었는가"를 malloc 경험으로 설명할 수 있다.
+
+pager를 만들 때 row마다 `malloc()` 하지 않고
+고정 크기 frame 배열을 직접 관리하는 것이 핵심이다.
+이것은 malloc 과제에서 "OS가 주는 큰 블록을 직접 쪼개서 관리한다"는 사고와 같다.
+
+### 발표에서 설명할 수 있는 한 줄
+
+`malloc lab에서 배운 free list, split, coalescing 원리를 그대로 DB page 관리에 적용해, row 단위 malloc 대신 page frame 기반 메모리 모델을 구현했다.`
+
 ## 3.4 CPU 연산 관점
 
 ### 핵심 개념
@@ -173,6 +200,7 @@ flowchart LR
 | 가상메모리 | page 중심 추상화 | `PAGE_SIZE = 4096` |
 | 파일 I/O | row 단위가 아니라 page 단위 read/write | pager + dirty page |
 | 메모리 | 동적 할당 최소화 | fixed-size row, slotted heap |
+| malloc | free list 기반 할당/반환 | page allocator + free page list |
 | CPU | 비교/분기/포인터 추적 줄이기 | `id` 정수 key, packed page layout |
 | 버스 | 이동 데이터량 줄이기 | B+ 트리 fan-out 확대, row_ref 사용 |
 
@@ -310,4 +338,10 @@ flowchart LR
 
 `우리는 이번 주에 배운 가상메모리와 파일 I/O 관점을 그대로 적용해, DB를 4KB page 단위의 바이너리 파일로 설계했고, row는 heap page에, id 인덱스는 B+ 트리 page에 저장해 page 이동량과 비교 횟수를 줄이도록 구현했다.`
 
-이 한 문장이 시스템 관점과 SQL 구현을 가장 잘 이어 준다.
+malloc 연결 요약:
+
+`pager의 page 할당/반환은 malloc/free와 같은 free list 구조이고, B+ tree의 split/merge는 블록 분할/합치기와 같은 구조다. malloc lab에서 배운 메모리 관리 원리를 디스크 저장 엔진에 직접 적용했다.`
+
+## 11. 참고 문서
+
+- B+ Tree와 디스크 page의 관계에 대한 상세 설명: [why-bptree-and-disk-pages.md](./why-bptree-and-disk-pages.md)
