@@ -39,6 +39,9 @@ typedef struct {
     frame_t     frames[MAX_FRAMES];  /* 페이지 프레임 배열 */
     uint64_t    tick;                /* 전역 틱 카운터 (LRU 추적용) */
     bool        header_dirty;        /* 헤더가 수정되었는지 여부 */
+    bool        log_flushes;         /* CLI에 pager flush 로그를 출력할지 여부 */
+    uint32_t    dirty_low_watermark; /* write-back 후 유지할 dirty frame 목표치 */
+    uint32_t    dirty_high_watermark;/* 이 개수 이상 dirty면 선제 flush 수행 */
 } pager_t;
 
 /* 생명주기 */
