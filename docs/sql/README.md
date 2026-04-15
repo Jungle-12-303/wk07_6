@@ -5,8 +5,13 @@
 
 ## 문서 목록
 
+- **[implementation-spec.md](./implementation-spec.md)** (확정판, 구현 시 이 문서 기준)
+  - 모든 설계 결정이 확정된 뒤 작성된 단일 구현 명세
+  - 기존 문서 5개의 내용을 흡수하고 확정 결정을 반영
+  - 코드 리뷰 가능한 수준의 최소 구현 스펙: 자료구조, API, 흐름도, 검증 계획
+  - 공간 재사용 3단계 설계, 벤치마크 상세, malloc 대응표 포함
 - [b-plus-tree-sql-plan.md](./b-plus-tree-sql-plan.md)
-  - 과제 요구사항을 디스크 기반 SQL 엔진 관점으로 정리한 메인 문서
+  - 과제 요구사항을 디스크 기반 SQL 엔진 관점으로 정리한 배경 문서
   - `.db` 바이너리 파일, page format, pager, heap table, on-disk `B+` 트리 구조 포함
   - SQL 실행 구조, 구현 단계, 학습 항목, 검증 계획 포함
 - [why-bptree-and-disk-pages.md](./why-bptree-and-disk-pages.md)
@@ -26,10 +31,11 @@
 
 ## 권장 읽는 순서
 
-1. `why-bptree-and-disk-pages.md` — 먼저 핵심 개념을 잡는다
-2. `b-plus-tree-sql-plan.md` — 전체 설계와 구현 계획을 본다
-3. `system-perspective-guide.md` — CSAPP/malloc 관점에서 왜 이렇게 설계했는지 이해한다
-4. `sql-feature-scope-roadmap.md` — 구현 범위를 결정한다
+1. **`implementation-spec.md`** — 확정된 구현 명세. 코드 작성 시 이 문서를 기준으로 한다.
+2. `why-bptree-and-disk-pages.md` — 핵심 개념을 잡는다 (배경 지식)
+3. `b-plus-tree-sql-plan.md` — 전체 설계 배경을 본다
+4. `system-perspective-guide.md` — CSAPP/malloc 관점 연결을 이해한다
+5. `sql-feature-scope-roadmap.md` — 구현 범위 선택 과정을 본다 (이미 Package 2로 확정)
 
 ## 구현 계획
 

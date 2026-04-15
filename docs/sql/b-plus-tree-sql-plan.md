@@ -121,7 +121,7 @@ flowchart LR
 ### 결정 1. 저장소는 메모리 덩어리가 아니라 디스크 page 단위다
 
 - 모든 읽기/쓰기는 `PAGE_SIZE` 기준으로 일어난다.
-- 권장 page 크기는 `4096B` 다.
+- page 크기는 OS page size를 `sysconf(_SC_PAGESIZE)`로 읽어 결정한다 (보통 4096B).
 - row page와 index node page를 같은 파일 안에 저장한다.
 
 ### 결정 2. row와 index를 분리한다
@@ -421,12 +421,16 @@ off_t offset = (off_t)page_id * PAGE_SIZE;
 
 ### 9.3 이번 주 pager 최소 스펙
 
-- 메모리에 page cache 배열을 둔다.
+- `pread`/`pwrite` 기반 I/O (mmap 아님, 프로세스 단 직접 관리).
+- page size는 `sysconf(_SC_PAGESIZE)`로 동적 결정.
+- 메모리에 page frame cache 배열(MAX_FRAMES)을 둔다.
 - 처음 접근한 page는 디스크에서 읽어온다.
 - 수정된 page는 dirty로 표시한다.
-- statement 종료 시 혹은 `.exit` 시 flush한다.
+- commit/종료 시 dirty page를 일괄 flush한다 (statement 단위 아님).
+- free page list를 통해 빈 page 재사용 경로를 확보한다.
 
 이 정도면 "디스크 기반" 이면서도 구현 복잡도를 통제할 수 있다.
+상세 API 설계는 [implementation-spec.md](./implementation-spec.md) 참조.
 
 ## 10. INSERT 실행 계획
 
@@ -649,15 +653,17 @@ blueprint에는 각 단계별 "이 단계에서 이해할 것"과 malloc 연결 
 - free slot / free page 재사용
 - parser / planner / executor 분리 이유
 
-### 15.2 구현 전에 확정할 것
+### 15.2 구현 전 확정 사항 (모두 결정 완료)
 
-- row schema를 고정 길이로 어떻게 잡을 것인가
-- 이번 주를 단일 테이블 중심으로 고정할 것인가
-- page size를 얼마로 할 것인가
-- page flush 시점을 statement 단위로 할 것인가, 종료 시 일괄로 할 것인가
-- delete 시 tombstone만 둘 것인가, free slot/page 재사용까지 넣을 것인가
-- lock granularity를 `DB` 전역 `RW lock` 으로 할 것인가
-- benchmark에서 cold start와 warm cache를 둘 다 볼 것인가
+- row schema: 스키마 문법(`CREATE TABLE`)으로 컬럼별 바이트 수 정의 (기본 타입만)
+- 단일 테이블 중심 고정
+- page size: OS page size를 `sysconf(_SC_PAGESIZE)`로 동적 로드
+- flush 시점: commit/종료 시 dirty page 일괄 flush
+- delete: tombstone + free slot 필수, free page list 확장 설계
+- lock: DB 전역 RW lock
+- benchmark: cold start / warm cache 모두 측정
+
+상세 설계는 [implementation-spec.md](./implementation-spec.md) 참조.
 
 ### 15.3 학습 우선순위
 
@@ -800,7 +806,7 @@ blueprint에는 각 단계별 "이 단계에서 이해할 것"과 malloc 연결 
 이번 주 최종 권장 조합은 아래와 같다.
 
 - 단일 `.db` 바이너리 파일
-- `4096B` page
+- OS page size 동적 로드 (보통 `4096B`)
 - slotted heap table
 - on-disk `B+` tree for `id`
 - tombstone + free slot / free page reuse

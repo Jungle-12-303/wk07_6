@@ -184,8 +184,8 @@ typedef struct {
 
 작업:
 
-- `PAGE_SIZE = 4096` 으로 고정한다.
-- `pread()` / `pwrite()` 기반 page read/write 를 구현한다.
+- page size는 `sysconf(_SC_PAGESIZE)`로 OS에서 동적으로 가져온다 (보통 4096).
+- `pread()` / `pwrite()` 기반 page read/write 를 구현한다 (mmap 아님).
 - 메모리에는 고정 개수 page frame cache를 둔다.
 - frame metadata는 `page_id`, `is_dirty`, `pin_count`, `used_tick` 정도면 충분하다.
 - free page list를 통해 빈 page 재사용 경로를 만든다.

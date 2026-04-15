@@ -77,18 +77,25 @@ flowchart LR
 
 ### 추천 구현 선택
 
-- `open` + `pread` + `pwrite` 기반 구현
+- `open` + `pread` + `pwrite` 기반 구현 (mmap 아님)
 - `page_id * PAGE_SIZE` 로 offset 계산
 - dirty page만 flush
-- statement 단위 혹은 종료 시점 flush
+- commit/종료 시점 일괄 flush (statement 단위 아님)
 
-### 왜 `mmap` 보다 `pread/pwrite` 를 먼저 추천하는가
+### 확정: `pread/pwrite` 사용 (mmap 아님)
 
-- offset 계산과 page read/write 의도가 더 직접적이다.
+`pread`/`pwrite`를 선택한 이유:
+
+- offset 계산과 page read/write 의도가 명시적이다.
+- flush 시점을 프로세스가 직접 제어할 수 있다 (commit/종료 시 일괄 flush).
+- mmap의 `msync`는 실제 writeback 시점을 OS가 결정하므로 flush 정책과 맞지 않는다.
+- mmap은 커널이 page fault → page-in → eviction을 관리하므로, pager를 직접 구현하는 학습 목적에 맞지 않는다.
+- mmap은 page fault 시 SIGBUS로 에러가 발생해 방어 코드 작성이 까다롭다.
+- cold/warm 벤치마크에서 OS page cache 동작이 끼어들면 측정이 불투명해진다.
 - 디버깅이 쉽다.
-- "우리가 pager를 구현했다"는 설명이 분명하다.
+- "우리가 pager를 직접 구현했다"는 설명이 분명하다.
 
-`mmap` 은 나중 확장 주제로 두고, 이번 주는 pager 구조를 명확히 보이는 편이 낫다.
+`mmap`은 비범위로 제외한다.
 
 ## 3.3 메모리 관점
 
@@ -197,7 +204,7 @@ pager를 만들 때 row마다 `malloc()` 하지 않고
 
 | 관점 | 바로 적용할 규칙 | 구현 선택 |
 |------|------------------|-----------|
-| 가상메모리 | page 중심 추상화 | `PAGE_SIZE = 4096` |
+| 가상메모리 | page 중심 추상화 | `page_size = sysconf(_SC_PAGESIZE)` |
 | 파일 I/O | row 단위가 아니라 page 단위 read/write | pager + dirty page |
 | 메모리 | 동적 할당 최소화 | fixed-size row, slotted heap |
 | malloc | free list 기반 할당/반환 | page allocator + free page list |
@@ -206,14 +213,14 @@ pager를 만들 때 row마다 `malloc()` 하지 않고
 
 ## 5. 구현 선택에 대한 구체적 가이드
 
-## 5.1 왜 page size를 4KB로 잡는가
+## 5.1 page size 결정: OS page size 동적 로드
 
-- OS 기본 page 크기와 잘 맞는다.
+- `sysconf(_SC_PAGESIZE)` 또는 `getpagesize()`로 OS page size를 읽어 결정한다.
+- 대부분의 환경에서 4096(4KB)이지만, 하드코딩하지 않는다.
+- 새 DB 생성 시 이 값을 header에 저장하고, 기존 DB를 열 때는 header의 page_size를 존중한다.
+- OS 기본 page 크기와 맞추면 커널 page cache와의 정렬이 좋다.
 - 너무 작으면 syscall과 page 개수가 늘어난다.
 - 너무 크면 내부 낭비와 overfetch가 커진다.
-- 설명하기도 쉽다.
-
-이번 주 과제에서는 `4KB` 가 가장 무난하다.
 
 ## 5.2 왜 row를 고정 길이로 잡는가
 
@@ -303,13 +310,20 @@ pager를 만들 때 row마다 `malloc()` 하지 않고
 - 프로그램 종료 후 reopen 검증을 빼먹기
 - benchmark에서 출력 비용까지 같이 재기
 
-## 8. 팀이 구현 전에 합의할 체크포인트
+## 8. 팀 합의 완료 체크포인트
 
-- page size는 `4096B` 로 갈 것인가
-- row schema는 몇 바이트로 고정할 것인가
-- flush 시점은 statement 단위인가, 종료 시점인가
-- benchmark는 cold start / warm cache 를 둘 다 볼 것인가
-- DB file은 단일 파일로 갈 것인가
+| 항목 | 확정 결정 |
+|------|-----------|
+| page size | OS page size 동적 로드 (`sysconf(_SC_PAGESIZE)`) |
+| row schema | 스키마 문법으로 컬럼별 바이트 수 정의 (기본 타입만) |
+| flush 시점 | commit/종료 시 dirty page 일괄 flush |
+| benchmark | cold start / warm cache 모두 측정 |
+| DB file | 단일 `.db` 바이너리 파일 |
+| I/O 방식 | `pread`/`pwrite` (프로세스 단 직접 관리) |
+| 공간 재사용 | tombstone + free slot 필수, free page list 확장 |
+| VACUUM FULL | 구현하지 않음 |
+
+상세 설계는 [implementation-spec.md](./implementation-spec.md) 참조.
 
 ## 9. 추천 검증 방법
 
