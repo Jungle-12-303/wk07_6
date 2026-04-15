@@ -58,7 +58,8 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
 
     if (hdr->column_count > 0) {
         res.status = -1;
-        snprintf(res.message, sizeof(res.message), "Error: table already exists");
+        snprintf(res.message, sizeof(res.message),
+                 "오류: '%s' 테이블이 이미 존재합니다", stmt->table_name);
         return res;
     }
 
@@ -90,7 +91,7 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
     pager->header_dirty = true;
 
     snprintf(res.message, sizeof(res.message),
-             "Table '%s' created (row_size=%u, columns=%u)",
+             "'%s' 테이블 생성 완료 (row_size=%u, columns=%u)",
              stmt->table_name, hdr->row_size, hdr->column_count);
     return res;
 }
@@ -104,7 +105,7 @@ static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
 
     if (hdr->column_count == 0) {
         res.status = -1;
-        snprintf(res.message, sizeof(res.message), "Error: no table created");
+        snprintf(res.message, sizeof(res.message), "오류: 생성된 테이블이 없습니다");
         return res;
     }
 
@@ -141,7 +142,7 @@ static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
 
     if (rc != 0) {
         res.status = -1;
-        snprintf(res.message, sizeof(res.message), "Error: duplicate key");
+        snprintf(res.message, sizeof(res.message), "오류: 중복된 키입니다");
         return res;
     }
 
@@ -150,7 +151,7 @@ static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
     pager->header_dirty = true;
 
     snprintf(res.message, sizeof(res.message),
-             "Inserted 1 row (id=%" PRIu64 ")", hdr->next_id - 1);
+             "1행 삽입 완료 (id=%" PRIu64 ")", hdr->next_id - 1);
     return res;
 }
 
@@ -210,14 +211,14 @@ static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt)
 
     row_ref_t ref;
     if (bptree_search(pager, stmt->pred_id, &ref) == false) {
-        snprintf(res.message, sizeof(res.message), "No row found with id=%" PRIu64, stmt->pred_id);
+        snprintf(res.message, sizeof(res.message), "오류: id=%" PRIu64 "인 행을 찾을 수 없습니다", stmt->pred_id);
         return res;
     }
 
     const uint8_t *row_data = heap_fetch(pager, ref, hdr->row_size);
     if (row_data == NULL) {
         res.status = -1;
-        snprintf(res.message, sizeof(res.message), "Error: row fetch failed");
+        snprintf(res.message, sizeof(res.message), "오류: 행 데이터를 읽지 못했습니다");
         return res;
     }
 
@@ -227,7 +228,7 @@ static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt)
 
     print_header(hdr);
     print_row(hdr, values);
-    snprintf(res.message, sizeof(res.message), "1 row (INDEX_LOOKUP)");
+    snprintf(res.message, sizeof(res.message), "1행 조회 (INDEX_LOOKUP)");
     return res;
 }
 
@@ -236,7 +237,7 @@ static exec_result_t exec_table_scan(pager_t *pager, statement_t *stmt)
     exec_result_t res = {0, ""};
     scan_ctx_t sc = { .pager = pager, .stmt = stmt, .count = 0 };
     heap_scan(pager, pager->header.row_size, select_scan_cb, &sc);
-    snprintf(res.message, sizeof(res.message), "%u rows (TABLE_SCAN)", sc.count);
+    snprintf(res.message, sizeof(res.message), "%u행 조회 (TABLE_SCAN)", sc.count);
     return res;
 }
 
@@ -296,7 +297,7 @@ static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
 
     row_ref_t ref;
     if (bptree_search(pager, stmt->pred_id, &ref) == false) {
-        snprintf(res.message, sizeof(res.message), "No row found with id=%" PRIu64, stmt->pred_id);
+        snprintf(res.message, sizeof(res.message), "오류: id=%" PRIu64 "인 행을 찾을 수 없습니다", stmt->pred_id);
         return res;
     }
 
@@ -305,7 +306,7 @@ static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
     pager->header.row_count--;
     pager->header_dirty = true;
 
-    snprintf(res.message, sizeof(res.message), "Deleted 1 row (id=%" PRIu64 ")", stmt->pred_id);
+    snprintf(res.message, sizeof(res.message), "1행 삭제 완료 (id=%" PRIu64 ")", stmt->pred_id);
     return res;
 }
 
@@ -331,7 +332,7 @@ static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt)
     free(dc.ids_to_delete);
     pager->header_dirty = true;
 
-    snprintf(res.message, sizeof(res.message), "Deleted %u rows (TABLE_SCAN)", dc.count);
+    snprintf(res.message, sizeof(res.message), "%u행 삭제 완료 (TABLE_SCAN)", dc.count);
     return res;
 }
 
@@ -356,7 +357,7 @@ static exec_result_t exec_explain(pager_t *pager, statement_t *stmt)
         }
         printf("  Scan: all heap pages\n");
     }
-    snprintf(res.message, sizeof(res.message), "EXPLAIN done");
+    snprintf(res.message, sizeof(res.message), "실행 계획 출력 완료");
     return res;
 }
 
@@ -386,6 +387,6 @@ exec_result_t execute(pager_t *pager, statement_t *stmt)
             return exec_index_delete(pager, stmt);
     }
 
-    exec_result_t res = { -1, "Unknown access path" };
+    exec_result_t res = { -1, "오류: 알 수 없는 접근 경로입니다" };
     return res;
 }

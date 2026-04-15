@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -Werror -g -Iinclude -fsanitize=address,undefined
-LDFLAGS = -fsanitize=address,undefined -lpthread
+LDFLAGS = -fsanitize=address,undefined -lpthread -lreadline
 
 SRC_DIR   = src
 BUILD_DIR = build

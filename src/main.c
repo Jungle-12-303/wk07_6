@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 static void cmd_btree(pager_t *pager)
 {
@@ -29,7 +31,7 @@ static void cmd_pages(pager_t *pager)
             case PAGE_TYPE_FREE:     free_count++; break;
         }
     }
-    printf("Total pages: %u\n", hdr->next_page_id);
+    printf("전체 페이지: %u\n", hdr->next_page_id);
     printf("  HEADER:   1\n");
     printf("  HEAP:     %u\n", heap_count);
     printf("  LEAF:     %u\n", leaf_count);
@@ -37,7 +39,7 @@ static void cmd_pages(pager_t *pager)
     printf("  FREE:     %u\n", free_count);
 
     if (hdr->free_page_head != 0) {
-        printf("Free page list:");
+        printf("빈 페이지 목록:");
         uint32_t fp = hdr->free_page_head;
         int c = 0;
         while (fp != 0 && c < 20) {
@@ -62,18 +64,18 @@ static void cmd_pages(pager_t *pager)
 static void cmd_stats(pager_t *pager)
 {
     db_header_t *hdr = &pager->header;
-    printf("Rows: %" PRIu64 " (live)\n", hdr->row_count);
-    printf("Next ID: %" PRIu64 "\n", hdr->next_id);
-    printf("Page size: %u\n", hdr->page_size);
-    printf("Row size: %u\n", hdr->row_size);
+    printf("행 수: %" PRIu64 " (live)\n", hdr->row_count);
+    printf("다음 ID: %" PRIu64 "\n", hdr->next_id);
+    printf("페이지 크기: %u\n", hdr->page_size);
+    printf("행 크기: %u\n", hdr->row_size);
     if (hdr->row_size > 0) {
         uint32_t rows_per_page = (hdr->page_size - sizeof(heap_page_header_t)) /
                                  (hdr->row_size + sizeof(slot_t));
-        printf("Rows per heap page: ~%u\n", rows_per_page);
+        printf("페이지당 행 수: ~%u\n", rows_per_page);
     }
-    printf("Total pages: %u\n", hdr->next_page_id);
-    printf("B+ Tree height: %d\n", bptree_height(pager));
-    printf("Free page head: %u\n", hdr->free_page_head);
+    printf("전체 페이지: %u\n", hdr->next_page_id);
+    printf("B+ Tree 높이: %d\n", bptree_height(pager));
+    printf("빈 페이지 헤드: %u\n", hdr->free_page_head);
 }
 
 int main(int argc, char **argv)
@@ -94,54 +96,58 @@ int main(int argc, char **argv)
     }
 
     if (pager_open(&pager, db_path, create) != 0) {
-        fprintf(stderr, "Failed to open database: %s\n", db_path);
+        fprintf(stderr, "오류: '%s' 데이터베이스를 열 수 없습니다\n", db_path);
         return 1;
     }
 
-    printf("minidb> Connected to %s (page_size=%u)\n", db_path, pager.page_size);
+    printf("minidb> '%s' 연결됨 (page_size=%u)\n", db_path, pager.page_size);
 
-    char line[4096];
-    while (1) {
-        printf("minidb> ");
-        fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) {
-            break;
-        }
-
-        /* trim newline */
+    char *line;
+    while ((line = readline("minidb> ")) != NULL) {
+        /* trim newline (readline strips it, but just in case) */
         size_t len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[--len] = '\0';
         }
 
         if (len == 0) {
+            free(line);
             continue;
         }
+
+        /* add to history */
+        add_history(line);
 
         /* meta commands */
         if (line[0] == '.') {
             if (strcmp(line, ".exit") == 0 || strcmp(line, ".quit") == 0) {
+                free(line);
                 break;
             }
             if (strcmp(line, ".btree") == 0) {
                 cmd_btree(&pager);
+                free(line);
                 continue;
             }
             if (strcmp(line, ".pages") == 0) {
                 cmd_pages(&pager);
+                free(line);
                 continue;
             }
             if (strcmp(line, ".stats") == 0) {
                 cmd_stats(&pager);
+                free(line);
                 continue;
             }
-            printf("Unknown command: %s\n", line);
+            printf("알 수 없는 명령어: %s\n", line);
+            free(line);
             continue;
         }
 
         statement_t stmt;
         if (parse(line, &stmt) != 0) {
-            printf("Error: could not parse statement\n");
+            printf("오류: SQL 구문을 해석할 수 없습니다\n");
+            free(line);
             continue;
         }
 
@@ -149,9 +155,11 @@ int main(int argc, char **argv)
         if (res.message[0] != '\0') {
             printf("%s\n", res.message);
         }
+
+        free(line);
     }
 
     pager_close(&pager);
-    printf("Bye.\n");
+    printf("종료합니다.\n");
     return 0;
 }

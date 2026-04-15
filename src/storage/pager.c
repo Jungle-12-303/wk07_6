@@ -47,7 +47,7 @@ static int evict_frame(pager_t *p)
         }
     }
     if (best < 0) {
-        fprintf(stderr, "pager: all frames pinned, cannot evict\n");
+        fprintf(stderr, "pager: 모든 프레임이 고정되어 교체할 수 없습니다\n");
         return -1;
     }
     /* flush if dirty */
@@ -160,7 +160,7 @@ int pager_open(pager_t *pager, const char *path, bool create)
         free(hbuf);
 
         if (memcmp(pager->header.magic, DB_MAGIC, 7) != 0) {
-            fprintf(stderr, "pager: invalid magic\n");
+            fprintf(stderr, "pager: 유효하지 않은 매직 넘버입니다\n");
             close(fd);
             return -1;
         }
