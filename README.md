@@ -179,6 +179,23 @@ make test
 
 - 테스트 바이너리: `build/test_all`
 - 현재 회귀 범위: schema, pager, heap, B+ Tree, parser, planner, persistence, delete/reuse
+- 실행결과
+
+```bash
+./build/test_all
+=== MiniDB Test Suite ===
+
+[test_schema]
+[test_pager]
+[test_heap]
+[test_bptree]
+[test_parser]
+[test_planner]
+[test_persistence]
+[test_delete_reuse]
+
+=== Results: 73/73 passed ===
+```
 
 ### 메타 명령어
 
