@@ -38,7 +38,10 @@ $(BUILD_DIR)/test_all: $(TEST_SRC) $(OBJS)
 test: $(BUILD_DIR)/test_all
 	./$(BUILD_DIR)/test_all
 
+run: $(BUILD_DIR)/minidb
+	./$(BUILD_DIR)/minidb sql.db
+
 clean:
 	rm -rf $(BUILD_DIR) *.db
 
-.PHONY: all test clean
+.PHONY: all test run clean
