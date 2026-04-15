@@ -119,6 +119,26 @@ id | name | age
 1 row (INDEX_LOOKUP)
 ```
 
+대량 데이터에서 `id` 인덱스 조회와 일반 컬럼 스캔의 차이는 아래처럼 나타난다.
+
+```text
+minidb> select * from users where id = 100000
+id | name | email | age
+-----------+------------+------------+-----------
+100000 | Amber Shin | user100000@test.com | 27
+1행 조회 (INDEX_LOOKUP)
+[debug] 소요: 2.73ms | 페이지 로드: 5 (히트: 1, 미스: 4) | 디스크 기록: 0
+
+minidb> select * from users where email = user100000@test.com
+id | name | email | age
+-----------+------------+------------+-----------
+100000 | Amber Shin | user100000@test.com | 27
+1행 조회 (TABLE_SCAN)
+[debug] 소요: 663.36ms | 페이지 로드: 20834 (히트: 0, 미스: 20834) | 디스크 기록: 0
+```
+
+즉 `WHERE id = ...`는 B+ tree를 따라 필요한 페이지 몇 개만 읽지만, `WHERE email = ...` 같은 조건은 인덱스가 없어서 heap 전체를 순차 스캔한다.
+
 ### DELETE FROM ... WHERE
 
 조건에 맞는 행을 삭제한다. 삭제된 슬롯은 free slot chain에 연결되어 재사용된다.
@@ -163,6 +183,16 @@ EXPLAIN done
 ## 메타 명령어
 
 REPL에서 `.`으로 시작하는 디버그 명령어를 사용할 수 있다.
+
+| 명령어 | 설명 |
+|--------|------|
+| `.stats` | DB 통계 정보 출력 |
+| `.debug` | 쿼리 디버그 모드 ON/OFF 토글 |
+| `.pages` | 페이지 유형별 개수 및 free page list 출력 |
+| `.btree` | B+ tree 구조 출력 |
+| `.log` | pager flush 로그 ON/OFF 토글 |
+| `.flush` | 모든 dirty 페이지를 수동으로 디스크에 기록 |
+| `.exit`, `.quit` | DB를 flush하고 종료 |
 
 ### .btree
 
@@ -224,6 +254,39 @@ Free page head: 0
 | Total pages | DB 파일 내 전체 페이지 수 |
 | B+ Tree height | B+ tree 높이 |
 | Free page head | free page list의 첫 페이지 (0이면 없음) |
+
+### .debug
+
+쿼리 디버그 모드를 켜거나 끈다. ON 상태에서는 각 SQL 실행 후 소요 시간, 페이지 로드 수, 캐시 히트/미스, 디스크 기록 수를 출력한다.
+
+```
+minidb> .debug
+디버그 모드: ON
+```
+
+출력 예시:
+
+```text
+[debug] 소요: 2.73ms | 페이지 로드: 5 (히트: 1, 미스: 4) | 디스크 기록: 0
+```
+
+### .log
+
+pager의 flush 로그 출력을 켜거나 끈다. dirty 페이지가 eviction되거나 flush될 때 어떤 페이지가 디스크에 기록되는지 stderr에 출력한다.
+
+```
+minidb> .log
+pager 로그: ON
+```
+
+### .flush
+
+현재 메모리 캐시에 남아 있는 모든 dirty 페이지를 즉시 디스크에 기록한다.
+
+```
+minidb> .flush
+모든 dirty 페이지를 디스크에 기록했습니다.
+```
 
 ### .exit / .quit
 
@@ -325,6 +388,115 @@ main() → pager_open()
 pager는 MAX_FRAMES(256)개의 frame을 메모리에 할당한다. 각 frame은 page_size 바이트 버퍼다.
 모든 페이지 접근은 `pager_get_page()`를 통해 frame cache를 거친다.
 cache miss 시 LRU eviction으로 가장 오래된 unpinned frame을 교체하고, dirty면 디스크에 먼저 쓴다.
+
+### 2. CREATE TABLE
+
+```
+입력: "CREATE TABLE users (name VARCHAR(32), age INT)"
+  → parser: 컬럼 정의 파싱 (name, type, size)
+  → executor: id BIGINT 시스템 컬럼 자동 추가
+  → schema_compute_layout(): 각 컬럼 offset 계산, row_size 확정
+  → header에 column_meta 저장, header_dirty = true
+```
+
+스키마 정보는 db_header_t의 columns[] 배열에 저장된다.
+row_size는 모든 컬럼 size의 합이며, 이후 모든 행 직렬화의 기준이 된다.
+
+### 3. INSERT
+
+```
+입력: "INSERT INTO users VALUES ('홍길동', 25)"
+  → parser: 값 문자열 파싱
+  → planner: ACCESS_PATH_INSERT 선택
+  → executor:
+      1. next_id 할당 (자동 증가)
+      2. row_value_t[] 구성 → row_serialize() → 바이트 버퍼
+      3. heap_insert(): 공간 있는 heap page 탐색 또는 신규 할당
+         ├── free slot chain에 빈 슬롯 있으면 재사용
+         └── 없으면 새 슬롯 추가 (앞에서 뒤로), 행 데이터는 페이지 끝에서 앞으로
+      4. bptree_insert(): B+ tree에 (key=id, value=row_ref) 삽입
+         ├── find_leaf()로 리프 탐색
+         ├── 공간 있으면 정렬 유지하며 삽입
+         └── 가득 차면 split_leaf() → promote key → insert_into_parent()
+      5. row_count++, next_id++
+```
+
+heap page의 slotted 구조는 다음과 같다:
+
+```
+[header][slot_0][slot_1]...[slot_N]   ← 앞에서 뒤로 증가
+                 [free space]
+[row_N]...[row_1][row_0]              ← 페이지 끝에서 앞으로 증가
+```
+
+### 4. SELECT (INDEX_LOOKUP)
+
+```
+입력: "SELECT * FROM users WHERE id = 1"
+  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_LOOKUP
+  → executor:
+      1. bptree_search(key=1): B+ tree에서 row_ref 획득
+         └── root → internal_child_for_key() → ... → leaf에서 binary search
+      2. heap_fetch(row_ref): 해당 페이지의 슬롯에서 행 데이터 읽기
+      3. row_deserialize() → 화면 출력
+```
+
+시간 복잡도: O(log n) — B+ tree 높이만큼 페이지 접근
+
+### 5. SELECT (TABLE_SCAN)
+
+```
+입력: "SELECT * FROM users WHERE name = '홍길동'"
+  → planner: PREDICATE_FIELD_EQ → ACCESS_PATH_TABLE_SCAN
+  → executor:
+      1. heap_scan(): 모든 heap page를 순회
+      2. 각 페이지의 모든 ALIVE 슬롯에 대해:
+         ├── row_deserialize()
+         ├── predicate 평가 (컬럼 값 비교)
+         └── 일치하면 출력
+```
+
+시간 복잡도: O(n) — 전체 행 순회
+
+### 6. DELETE
+
+```
+입력: "DELETE FROM users WHERE id = 1"
+  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_DELETE
+  → executor:
+      1. bptree_search(key=1) → row_ref 획득
+      2. heap_delete(row_ref):
+         ├── slot.status = SLOT_FREE
+         └── slot을 free_slot_head chain에 연결 (다음 INSERT에서 재사용)
+      3. bptree_delete(key=1):
+         ├── leaf에서 엔트리 제거
+         ├── underflow 시 fix_leaf_after_delete():
+         │   ├── 우측 형제에서 borrow 시도
+         │   ├── 좌측 형제에서 borrow 시도
+         │   └── merge (형제와 합병 + parent separator 제거)
+         └── root shrink: root가 0 키면 유일한 자식을 새 root로
+      4. row_count--
+```
+
+공간 재사용 3단계:
+
+| 단계 | 메커니즘 | 재사용 시점 |
+|------|---------|-----------|
+| 1단계 | free slot chain | 같은 heap page에 INSERT 시 |
+| 2단계 | free page list | merge로 빈 페이지 발생 시 pager_alloc_page()에서 재사용 |
+| 3단계 | 파일 축소 없음 | VACUUM FULL 미구현 (설계 결정) |
+
+### 7. 종료 (pager_close)
+
+```
+pager_close()
+  → pager_flush_all():
+      1. 모든 dirty frame을 pwrite()로 디스크에 기록
+      2. header를 page 0에 기록
+      3. fsync()로 OS 버퍼 강제 flush
+  → frame 메모리 해제
+  → fd close
+```
 
 ### 페이지 레이아웃
 
@@ -451,158 +623,6 @@ key = 200 -> right_child = page 7
 - 작은 수정도 페이지 단위 dirty/flush 관리가 필요하다
 - 슬롯, free space, split/merge 등 구현 복잡도가 올라간다
 - 페이지 크기 선택이 성능과 공간 효율에 큰 영향을 준다
-
-### 2. CREATE TABLE
-
-```
-입력: "CREATE TABLE users (name VARCHAR(32), age INT)"
-  → parser: 컬럼 정의 파싱 (name, type, size)
-  → executor: id BIGINT 시스템 컬럼 자동 추가
-  → schema_compute_layout(): 각 컬럼 offset 계산, row_size 확정
-  → header에 column_meta 저장, header_dirty = true
-```
-
-스키마 정보는 db_header_t의 columns[] 배열에 저장된다.
-row_size는 모든 컬럼 size의 합이며, 이후 모든 행 직렬화의 기준이 된다.
-
-### 3. INSERT
-
-```
-입력: "INSERT INTO users VALUES ('홍길동', 25)"
-  → parser: 값 문자열 파싱
-  → planner: ACCESS_PATH_INSERT 선택
-  → executor:
-      1. next_id 할당 (자동 증가)
-      2. row_value_t[] 구성 → row_serialize() → 바이트 버퍼
-      3. heap_insert(): 공간 있는 heap page 탐색 또는 신규 할당
-         ├── free slot chain에 빈 슬롯 있으면 재사용
-         └── 없으면 새 슬롯 추가 (앞에서 뒤로), 행 데이터는 페이지 끝에서 앞으로
-      4. bptree_insert(): B+ tree에 (key=id, value=row_ref) 삽입
-         ├── find_leaf()로 리프 탐색
-         ├── 공간 있으면 정렬 유지하며 삽입
-         └── 가득 차면 split_leaf() → promote key → insert_into_parent()
-      5. row_count++, next_id++
-```
-
-heap page의 slotted 구조는 다음과 같다:
-
-```
-[header][slot_0][slot_1]...[slot_N]   ← 앞에서 뒤로 증가
-                 [free space]
-[row_N]...[row_1][row_0]              ← 페이지 끝에서 앞으로 증가
-```
-
-### 4. SELECT (INDEX_LOOKUP)
-
-```
-입력: "SELECT * FROM users WHERE id = 1"
-  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_LOOKUP
-  → executor:
-      1. bptree_search(key=1): B+ tree에서 row_ref 획득
-         └── root → internal_child_for_key() → ... → leaf에서 binary search
-      2. heap_fetch(row_ref): 해당 페이지의 슬롯에서 행 데이터 읽기
-      3. row_deserialize() → 화면 출력
-```
-
-시간 복잡도: O(log n) — B+ tree 높이만큼 페이지 접근
-
-### 5. SELECT (TABLE_SCAN)
-
-```
-입력: "SELECT * FROM users WHERE name = '홍길동'"
-  → planner: PREDICATE_FIELD_EQ → ACCESS_PATH_TABLE_SCAN
-  → executor:
-      1. heap_scan(): 모든 heap page를 순회
-      2. 각 페이지의 모든 ALIVE 슬롯에 대해:
-         ├── row_deserialize()
-         ├── predicate 평가 (컬럼 값 비교)
-         └── 일치하면 출력
-```
-
-시간 복잡도: O(n) — 전체 행 순회
-
-### 6. DELETE
-
-```
-입력: "DELETE FROM users WHERE id = 1"
-  → planner: PREDICATE_ID_EQ → ACCESS_PATH_INDEX_DELETE
-  → executor:
-      1. bptree_search(key=1) → row_ref 획득
-      2. heap_delete(row_ref):
-         ├── slot.status = SLOT_FREE
-         └── slot을 free_slot_head chain에 연결 (다음 INSERT에서 재사용)
-      3. bptree_delete(key=1):
-         ├── leaf에서 엔트리 제거
-         ├── underflow 시 fix_leaf_after_delete():
-         │   ├── 우측 형제에서 borrow 시도
-         │   ├── 좌측 형제에서 borrow 시도
-         │   └── merge (형제와 합병 + parent separator 제거)
-         └── root shrink: root가 0 키면 유일한 자식을 새 root로
-      4. row_count--
-```
-
-공간 재사용 3단계:
-
-| 단계 | 메커니즘 | 재사용 시점 |
-|------|---------|-----------|
-| 1단계 | free slot chain | 같은 heap page에 INSERT 시 |
-| 2단계 | free page list | merge로 빈 페이지 발생 시 pager_alloc_page()에서 재사용 |
-| 3단계 | 파일 축소 없음 | VACUUM FULL 미구현 (설계 결정) |
-
-### 7. 종료 (pager_close)
-
-```
-pager_close()
-  → pager_flush_all():
-      1. 모든 dirty frame을 pwrite()로 디스크에 기록
-      2. header를 page 0에 기록
-      3. fsync()로 OS 버퍼 강제 flush
-  → frame 메모리 해제
-  → fd close
-```
-
-
-## 코드 리뷰 가이드
-
-이 프로젝트의 코드를 리뷰할 때 아래 순서와 관점을 참고한다.
-
-### 권장 리뷰 순서
-
-1. `include/storage/page_format.h` — 모든 on-disk 구조체가 정의되어 있다. packed 속성, 타입 크기, 매직 넘버를 먼저 파악한다.
-2. `include/storage/pager.h` → `src/storage/pager.c` — 디스크 I/O의 핵심. frame cache, LRU, pin/unpin 흐름을 따라간다.
-3. `src/storage/schema.c` — 행 직렬화/역직렬화. offset 계산과 memcpy 경계를 확인한다.
-4. `src/storage/table.c` — slotted heap page. 슬롯 디렉토리가 앞에서 뒤로, 행 데이터가 뒤에서 앞으로 자라는 구조를 이해한다.
-5. `src/storage/bptree.c` — B+ tree 전체. insert → split → insert_into_parent 체인과 delete → fix_leaf → fix_internal 체인을 추적한다.
-6. `src/sql/parser.c` → `planner.c` → `executor.c` — SQL 처리 파이프라인. parser가 statement_t를 만들고, planner가 access_path를 결정하고, executor가 실행한다.
-7. `src/main.c` — REPL 루프와 메타 명령어.
-8. `tests/test_all.c` — 각 모듈의 정합성 테스트.
-
-### 리뷰 시 확인할 핵심 포인트
-
-**pager.c**
-
-- `pager_get_page()` 호출 후 반드시 `pager_unpin()`이 쌍으로 호출되는지 (pin leak 방지)
-- dirty page가 eviction 시 디스크에 쓰이는지
-- free page list가 순환 참조 없이 유지되는지
-
-**table.c**
-
-- `free_space_offset`이 슬롯 디렉토리 영역을 침범하지 않는지 (`available_space()` 로직)
-- free slot chain이 정상 연결/해제되는지
-- 삭제된 슬롯의 행 데이터 공간이 재사용 시 정확히 덮어쓰이는지
-
-**bptree.c**
-
-- split 시 promote key가 정확한지 (leaf: 첫 번째 right 키, internal: median)
-- merge 후 sibling pointer(prev/next_leaf_page_id)가 갱신되는지
-- parent_page_id가 split/merge 후 모든 자식에서 올바르게 갱신되는지
-- root shrink 조건이 정확한지 (key_count == 0일 때 leftmost_child를 새 root로)
-
-**executor.c**
-
-- DELETE 시 heap_delete()와 bptree_delete()가 항상 쌍으로 호출되는지
-- row_count 감소가 실제 삭제 건수와 일치하는지
-- TABLE_SCAN delete에서 scan 중 삭제하지 않고 id를 수집한 뒤 일괄 삭제하는지 (iterator invalidation 방지)
 
 ### 알려진 한계
 
