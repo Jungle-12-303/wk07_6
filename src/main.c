@@ -22,6 +22,7 @@
  *   .stats         — DB 전체 통계 (행 수, 페이지 크기, 트리 높이 등)
  *   .log           — pager 플러시 로그 ON/OFF 토글
  *   .flush         — 모든 dirty 페이지를 수동으로 디스크에 기록
+ *   .debug         — 쿼리 디버그 모드 ON/OFF 토글 (페이지 로드/히트/미스/소요시간 출력)
  *
  * 사용법: ./minidb [데이터베이스 파일 경로]
  *   기본값: test.db
@@ -37,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -188,10 +190,19 @@ int main(int argc, char **argv)
     /* REPL: readline으로 입력을 받아 반복 실행 */
     char *line;
     while ((line = readline("minidb> ")) != NULL) {
-        /* 줄바꿈 문자 제거 */
+        /* 앞뒤 공백/줄바꿈 제거 */
         size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'
+                        || line[len - 1] == ' '  || line[len - 1] == '\t')) {
             line[--len] = '\0';
+        }
+        char *start = line;
+        while (*start == ' ' || *start == '\t') {
+            start++;
+            len--;
+        }
+        if (start != line) {
+            memmove(line, start, len + 1);
         }
 
         /* 빈 입력은 무시 */
@@ -236,6 +247,12 @@ int main(int argc, char **argv)
                 free(line);
                 continue;
             }
+            if (strcmp(line, ".debug") == 0) {
+                pager.debug_mode = !pager.debug_mode;
+                printf("디버그 모드: %s\n", pager.debug_mode ? "ON" : "OFF");
+                free(line);
+                continue;
+            }
             printf("알 수 없는 명령어: %s\n", line);
             free(line);
             continue;
@@ -249,9 +266,26 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* 디버그 모드: 통계 초기화 + 실행 시간 측정 시작 */
+        struct timespec ts_start, ts_end;
+        if (pager.debug_mode) {
+            pager_reset_stats(&pager);
+            clock_gettime(CLOCK_MONOTONIC, &ts_start);
+        }
+
         exec_result_t res = execute(&pager, &stmt);
         if (res.message[0] != '\0') {
             printf("%s\n", res.message);
+        }
+
+        /* 디버그 모드: 통계 출력 */
+        if (pager.debug_mode) {
+            clock_gettime(CLOCK_MONOTONIC, &ts_end);
+            double elapsed_ms = (ts_end.tv_sec - ts_start.tv_sec) * 1000.0
+                              + (ts_end.tv_nsec - ts_start.tv_nsec) / 1e6;
+            query_stats_t *s = &pager.stats;
+            printf("[debug] 소요: %.2fms | 페이지 로드: %u (히트: %u, 미스: %u) | 디스크 기록: %u\n",
+                   elapsed_ms, s->page_loads, s->cache_hits, s->cache_misses, s->pages_flushed);
         }
 
         free(line);

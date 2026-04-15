@@ -38,10 +38,21 @@ $(BUILD_DIR)/test_all: $(TEST_SRC) $(OBJS)
 test: $(BUILD_DIR)/test_all
 	./$(BUILD_DIR)/test_all
 
+# 대량 데이터 생성기
+GEN_SRC = tools/gen_data.c
+$(BUILD_DIR)/gen_data: $(GEN_SRC) $(OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
 run: $(BUILD_DIR)/minidb
 	./$(BUILD_DIR)/minidb sql.db
+
+# N=100만 기본값, make gen N=500000 등으로 변경 가능
+N ?= 1000000
+gen: $(BUILD_DIR)/gen_data
+	./$(BUILD_DIR)/gen_data sql.db $(N)
 
 clean:
 	rm -rf $(BUILD_DIR) *.db
 
-.PHONY: all test run clean
+.PHONY: all test run gen clean

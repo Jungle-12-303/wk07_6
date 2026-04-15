@@ -18,8 +18,8 @@
  *   |__ page_size ___|__ page_size __________|__ page_size _________|
  *
  * 캐시(프레임) 동작:
- *   pager_get_page(pid) → 캐시에 있으면 반환(pin++), 없으면 LRU 교체 후 디스크에서 읽기
- *   pager_mark_dirty(pid) → 수정됨 표시, flush 시 디스크에 기록
+ *   pager_get_page(pid) → 캐시에 있으면 반환(pin++), 없으면 LRU 교체 후
+ * 디스크에서 읽기 pager_mark_dirty(pid) → 수정됨 표시, flush 시 디스크에 기록
  *   pager_unpin(pid) → pin-- (0이 되면 LRU 교체 대상)
  *
  * 빈 페이지 재활용:
@@ -29,23 +29,29 @@
  */
 
 #include "storage/pager.h"
+
 #include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 /* ── 페이지 타입 → 문자열 변환 (로깅용) ── */
-static const char *page_type_str(uint32_t ptype)
-{
-    switch (ptype) {
-        case PAGE_TYPE_HEADER:   return "HEADER";
-        case PAGE_TYPE_HEAP:     return "HEAP";
-        case PAGE_TYPE_LEAF:     return "LEAF";
-        case PAGE_TYPE_INTERNAL: return "INTERNAL";
-        case PAGE_TYPE_FREE:     return "FREE";
-        default:                 return "UNKNOWN";
-    }
+static const char* page_type_str(uint32_t ptype) {
+  switch (ptype) {
+    case PAGE_TYPE_HEADER:
+      return "HEADER";
+    case PAGE_TYPE_HEAP:
+      return "HEAP";
+    case PAGE_TYPE_LEAF:
+      return "LEAF";
+    case PAGE_TYPE_INTERNAL:
+      return "INTERNAL";
+    case PAGE_TYPE_FREE:
+      return "FREE";
+    default:
+      return "UNKNOWN";
+  }
 }
 
 /* ── 디스크 직접 I/O 헬퍼 ──
@@ -58,17 +64,16 @@ static const char *page_type_str(uint32_t ptype)
  */
 
 /* 디스크에서 page_id 위치의 페이지를 buf로 직접 읽는다 (캐시 우회) */
-static ssize_t pager_raw_read(pager_t *p, uint32_t page_id, uint8_t *buf)
-{
-    off_t off = (off_t)page_id * p->page_size;
-    return pread(p->fd, buf, p->page_size, off);
+static ssize_t pager_raw_read(pager_t* p, uint32_t page_id, uint8_t* buf) {
+  off_t off = (off_t)page_id * p->page_size;
+  return pread(p->fd, buf, p->page_size, off);
 }
 
 /* buf의 내용을 디스크의 page_id 위치에 직접 쓴다 (캐시 우회) */
-static ssize_t pager_raw_write(pager_t *p, uint32_t page_id, const uint8_t *buf)
-{
-    off_t off = (off_t)page_id * p->page_size;
-    return pwrite(p->fd, buf, p->page_size, off);
+static ssize_t pager_raw_write(pager_t* p, uint32_t page_id,
+                               const uint8_t* buf) {
+  off_t off = (off_t)page_id * p->page_size;
+  return pwrite(p->fd, buf, p->page_size, off);
 }
 
 /* ── 프레임 탐색 / 교체 ──
@@ -88,14 +93,13 @@ static ssize_t pager_raw_write(pager_t *p, uint32_t page_id, const uint8_t *buf)
  * 캐시 히트 시 인덱스를 반환하고, 캐시 미스 시 -1을 반환한다.
  * 선형 탐색 O(256) — 프레임 수가 고정이므로 충분히 빠르다.
  */
-static int find_frame(pager_t *p, uint32_t page_id)
-{
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        if (p->frames[i].is_valid && p->frames[i].page_id == page_id) {
-            return i;
-        }
+static int find_frame(pager_t* p, uint32_t page_id) {
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    if (p->frames[i].is_valid && p->frames[i].page_id == page_id) {
+      return i;
     }
-    return -1;
+  }
+  return -1;
 }
 
 /*
@@ -114,40 +118,40 @@ static int find_frame(pager_t *p, uint32_t page_id)
  *
  * 모든 프레임이 pin 상태이면 -1을 반환한다.
  */
-static int evict_frame(pager_t *p)
-{
-    /* 빈 프레임 탐색 */
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        if (!p->frames[i].is_valid) {
-            return i;
-        }
+static int evict_frame(pager_t* p) {
+  /* 빈 프레임 탐색 */
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    if (!p->frames[i].is_valid) {
+      return i;
     }
-    /* LRU: 고정되지 않은 프레임 중 가장 오래된 것 선택 */
-    int best = -1;
-    uint64_t min_tick = UINT64_MAX;
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        if (p->frames[i].pin_count == 0 && p->frames[i].used_tick < min_tick) {
-            min_tick = p->frames[i].used_tick;
-            best = i;
-        }
+  }
+  /* LRU: 고정되지 않은 프레임 중 가장 오래된 것 선택 */
+  int best = -1;
+  uint64_t min_tick = UINT64_MAX;
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    if (p->frames[i].pin_count == 0 && p->frames[i].used_tick < min_tick) {
+      min_tick = p->frames[i].used_tick;
+      best = i;
     }
-    if (best < 0) {
-        fprintf(stderr, "pager: 모든 프레임이 고정되어 교체할 수 없습니다\n");
-        return -1;
+  }
+  if (best < 0) {
+    fprintf(stderr, "pager: 모든 프레임이 고정되어 교체할 수 없습니다\n");
+    return -1;
+  }
+  /* dirty 프레임은 디스크에 기록 후 교체 */
+  if (p->frames[best].is_dirty) {
+    pager_raw_write(p, p->frames[best].page_id, p->frames[best].data);
+    p->stats.pages_flushed++;
+    if (p->log_flushes) {
+      uint32_t ptype;
+      memcpy(&ptype, p->frames[best].data, sizeof(uint32_t));
+      fprintf(stderr, "[pager] evict  page %u (%s, dirty→disk)\n",
+              p->frames[best].page_id, page_type_str(ptype));
     }
-    /* dirty 프레임은 디스크에 기록 후 교체 */
-    if (p->frames[best].is_dirty) {
-        pager_raw_write(p, p->frames[best].page_id, p->frames[best].data);
-        if (p->log_flushes) {
-            uint32_t ptype;
-            memcpy(&ptype, p->frames[best].data, sizeof(uint32_t));
-            fprintf(stderr, "[pager] evict  page %u (%s, dirty→disk)\n",
-                    p->frames[best].page_id, page_type_str(ptype));
-        }
-        p->frames[best].is_dirty = false;
-    }
-    p->frames[best].is_valid = false;
-    return best;
+    p->frames[best].is_dirty = false;
+  }
+  p->frames[best].is_valid = false;
+  return best;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -166,7 +170,8 @@ static int evict_frame(pager_t *p)
  *      - first_heap_page_id = 1
  *      - root_index_page_id = 2
  *      - next_page_id = 3 (다음에 할당할 페이지)
- *   4. page 0(헤더), page 1(빈 힙), page 2(빈 B+ tree 리프)를 디스크에 기록한다.
+ *   4. page 0(헤더), page 1(빈 힙), page 2(빈 B+ tree 리프)를 디스크에
+ * 기록한다.
  *
  * create == false (기존 DB 열기):
  *   1. 파일의 첫 4096바이트를 읽어 헤더를 확인한다.
@@ -176,138 +181,134 @@ static int evict_frame(pager_t *p)
  *
  * 반환값: 0 = 성공, -1 = 실패
  */
-int pager_open(pager_t *pager, const char *path, bool create)
-{
-    memset(pager, 0, sizeof(*pager));
+int pager_open(pager_t* pager, const char* path, bool create) {
+  memset(pager, 0, sizeof(*pager));
 
-    /* OS 페이지 크기를 기본값으로 사용 */
-    uint32_t ps = (uint32_t)sysconf(_SC_PAGESIZE);
-    if (ps == 0 || ps == (uint32_t)-1) {
-        ps = 4096;
+  /* OS 페이지 크기를 기본값으로 사용 */
+  uint32_t ps = (uint32_t)sysconf(_SC_PAGESIZE);
+  if (ps == 0 || ps == (uint32_t)-1) {
+    ps = 4096;
+  }
+
+  /* 워터마크 기본값: dirty 프레임 64개 넘으면 16개까지 선제 플러시 */
+  pager->dirty_high_watermark = 64;
+  pager->dirty_low_watermark = 16;
+
+  int flags = O_RDWR;
+  if (create) {
+    flags |= O_CREAT | O_TRUNC;
+  }
+  int fd = open(path, flags, 0644);
+  if (fd < 0) {
+    return -1;
+  }
+
+  pager->fd = fd;
+
+  /*
+   * 프레임 버퍼 256개 할당 (초기에는 OS 페이지 크기로)
+   * 4096바이트 × 256 = 약 1MB 메모리 사용
+   * 16384바이트 × 256 = 약 4MB 메모리 사용
+   */
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    pager->frames[i].data = (uint8_t*)calloc(1, ps);
+    if (pager->frames[i].data == NULL) {
+      close(fd);
+      return -1;
     }
+  }
 
-    /* 워터마크 기본값: dirty 프레임 64개 넘으면 16개까지 선제 플러시 */
-    pager->dirty_high_watermark = 64;
-    pager->dirty_low_watermark  = 16;
+  /* DB 파일 최초 생성 */
+  if (create) {
+    pager->page_size = ps;
 
-    int flags = O_RDWR;
-    if (create) {
-        flags |= O_CREAT | O_TRUNC;
-    }
-    int fd = open(path, flags, 0644);
-    if (fd < 0) {
-        return -1;
-    }
-
-    pager->fd = fd;
+    /* DB 헤더 초기화 */
+    db_header_t* h = &pager->header;
+    memcpy(h->magic, DB_MAGIC, 8);
+    h->version = DB_VERSION;
+    h->page_size = ps;
+    h->first_heap_page_id = 1; /* page 1 = 첫 번째 힙 페이지 */
+    h->root_index_page_id = 2; /* page 2 = B+ tree 루트 (빈 리프) */
+    h->next_page_id = 3;       /* 다음 할당 = page 3부터 */
+    h->free_page_head = 0;     /* 빈 페이지 없음 */
+    h->next_id = 1;            /* 자동 증가 ID 시작값 */
+    h->row_count = 0;
+    h->column_count = 0;
+    h->row_size = 0;
 
     /*
-     * 프레임 버퍼 256개 할당 (초기에는 OS 페이지 크기로)
-     * 4096바이트 × 256 = 약 1MB 메모리 사용
-     * 16384바이트 × 256 = 약 4MB 메모리 사용
+     * 초기 3개 페이지를 디스크에 기록한다.
+     * 파일 레이아웃:
+     *   [page 0: DB 헤더][page 1: 빈 힙][page 2: 빈 리프]
+     *   |_____ ps ______||_____ ps ____||_____ ps ______|
      */
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        pager->frames[i].data = (uint8_t *)calloc(1, ps);
-        if (pager->frames[i].data == NULL) {
-            close(fd);
-            return -1;
-        }
+    uint8_t* buf = (uint8_t*)calloc(1, ps);
+
+    /* page 0: DB 헤더 */
+    memcpy(buf, h, sizeof(*h));
+    pager_raw_write(pager, 0, buf);
+
+    /* page 1: 빈 힙 페이지 (slot_count=0, 행 없음) */
+    memset(buf, 0, ps);
+    heap_page_header_t hph = {.page_type = PAGE_TYPE_HEAP,
+                              .next_heap_page_id = 0,
+                              .slot_count = 0,
+                              .free_slot_head = SLOT_NONE,
+                              .free_space_offset = 0,
+                              .reserved = 0};
+    memcpy(buf, &hph, sizeof(hph));
+    pager_raw_write(pager, 1, buf);
+
+    /* page 2: 빈 B+ tree 리프 루트 (key_count=0) */
+    memset(buf, 0, ps);
+    leaf_page_header_t lph = {.page_type = PAGE_TYPE_LEAF,
+                              .parent_page_id = 0,
+                              .key_count = 0,
+                              .next_leaf_page_id = 0,
+                              .prev_leaf_page_id = 0};
+    memcpy(buf, &lph, sizeof(lph));
+    pager_raw_write(pager, 2, buf);
+
+    free(buf);
+    fsync(fd);
+  } else {
+    /*
+     * 기존 DB 열기
+     *
+     * 헤더의 page_size가 OS 페이지 크기와 다를 수 있다.
+     * 예: 리눅스(4096)에서 만든 DB를 Apple Silicon(16384)에서 열면
+     *     initial_ps=16384인데 헤더의 page_size=4096
+     *     → 프레임을 4096 크기로 재할당해야 함
+     */
+    uint32_t initial_ps = ps;
+    uint8_t tmp[4096];
+    pread(fd, tmp, sizeof(tmp), 0);
+    db_header_t* th = (db_header_t*)tmp;
+    pager->page_size = th->page_size;
+    ps = pager->page_size;
+
+    /* DB의 page_size가 초기 할당 크기와 다르면 프레임 재할당 */
+    if (ps != initial_ps) {
+      for (int i = 0; i < MAX_FRAMES; i++) {
+        free(pager->frames[i].data);
+        pager->frames[i].data = (uint8_t*)calloc(1, ps);
+      }
     }
 
-    if (create) {
-        pager->page_size = ps;
+    /* 전체 헤더 페이지 읽기 */
+    uint8_t* hbuf = (uint8_t*)calloc(1, ps);
+    pread(fd, hbuf, ps, 0);
+    memcpy(&pager->header, hbuf, sizeof(db_header_t));
+    free(hbuf);
 
-        /* DB 헤더 초기화 */
-        db_header_t *h = &pager->header;
-        memcpy(h->magic, DB_MAGIC, 8);
-        h->version = DB_VERSION;
-        h->page_size = ps;
-        h->first_heap_page_id = 1;   /* page 1 = 첫 번째 힙 페이지 */
-        h->root_index_page_id = 2;   /* page 2 = B+ tree 루트 (빈 리프) */
-        h->next_page_id = 3;         /* 다음 할당 = page 3부터 */
-        h->free_page_head = 0;       /* 빈 페이지 없음 */
-        h->next_id = 1;              /* 자동 증가 ID 시작값 */
-        h->row_count = 0;
-        h->column_count = 0;
-        h->row_size = 0;
-
-        /*
-         * 초기 3개 페이지를 디스크에 기록한다.
-         * 파일 레이아웃:
-         *   [page 0: DB 헤더][page 1: 빈 힙][page 2: 빈 리프]
-         *   |_____ ps ______||_____ ps ____||_____ ps ______|
-         */
-        uint8_t *buf = (uint8_t *)calloc(1, ps);
-
-        /* page 0: DB 헤더 */
-        memcpy(buf, h, sizeof(*h));
-        pager_raw_write(pager, 0, buf);
-
-        /* page 1: 빈 힙 페이지 (slot_count=0, 행 없음) */
-        memset(buf, 0, ps);
-        heap_page_header_t hph = {
-            .page_type = PAGE_TYPE_HEAP,
-            .next_heap_page_id = 0,
-            .slot_count = 0,
-            .free_slot_head = SLOT_NONE,
-            .free_space_offset = 0,
-            .reserved = 0
-        };
-        memcpy(buf, &hph, sizeof(hph));
-        pager_raw_write(pager, 1, buf);
-
-        /* page 2: 빈 B+ tree 리프 루트 (key_count=0) */
-        memset(buf, 0, ps);
-        leaf_page_header_t lph = {
-            .page_type = PAGE_TYPE_LEAF,
-            .parent_page_id = 0,
-            .key_count = 0,
-            .next_leaf_page_id = 0,
-            .prev_leaf_page_id = 0
-        };
-        memcpy(buf, &lph, sizeof(lph));
-        pager_raw_write(pager, 2, buf);
-
-        free(buf);
-        fsync(fd);
-    } else {
-        /*
-         * 기존 DB 열기
-         *
-         * 헤더의 page_size가 OS 페이지 크기와 다를 수 있다.
-         * 예: 리눅스(4096)에서 만든 DB를 Apple Silicon(16384)에서 열면
-         *     initial_ps=16384인데 헤더의 page_size=4096
-         *     → 프레임을 4096 크기로 재할당해야 함
-         */
-        uint32_t initial_ps = ps;
-        uint8_t tmp[4096];
-        pread(fd, tmp, sizeof(tmp), 0);
-        db_header_t *th = (db_header_t *)tmp;
-        pager->page_size = th->page_size;
-        ps = pager->page_size;
-
-        /* DB의 page_size가 초기 할당 크기와 다르면 프레임 재할당 */
-        if (ps != initial_ps) {
-            for (int i = 0; i < MAX_FRAMES; i++) {
-                free(pager->frames[i].data);
-                pager->frames[i].data = (uint8_t *)calloc(1, ps);
-            }
-        }
-
-        /* 전체 헤더 페이지 읽기 */
-        uint8_t *hbuf = (uint8_t *)calloc(1, ps);
-        pread(fd, hbuf, ps, 0);
-        memcpy(&pager->header, hbuf, sizeof(db_header_t));
-        free(hbuf);
-
-        /* 매직 넘버 검증 ("MINIDB\0" 7바이트 비교) */
-        if (memcmp(pager->header.magic, DB_MAGIC, 7) != 0) {
-            fprintf(stderr, "pager: 유효하지 않은 매직 넘버입니다\n");
-            close(fd);
-            return -1;
-        }
+    /* 매직 넘버 검증 ("MINIDB\0" 7바이트 비교) */
+    if (memcmp(pager->header.magic, DB_MAGIC, 7) != 0) {
+      fprintf(stderr, "pager: 유효하지 않은 매직 넘버입니다\n");
+      close(fd);
+      return -1;
     }
-    return 0;
+  }
+  return 0;
 }
 
 /*
@@ -318,17 +319,16 @@ int pager_open(pager_t *pager, const char *path, bool create)
  *   2. 프레임 메모리 256개 해제
  *   3. 파일 디스크립터 닫기
  */
-void pager_close(pager_t *pager)
-{
-    pager_flush_all(pager);
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        free(pager->frames[i].data);
-        pager->frames[i].data = NULL;
-    }
-    if (pager->fd >= 0) {
-        close(pager->fd);
-        pager->fd = -1;
-    }
+void pager_close(pager_t* pager) {
+  pager_flush_all(pager);
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    free(pager->frames[i].data);
+    pager->frames[i].data = NULL;
+  }
+  if (pager->fd >= 0) {
+    close(pager->fd);
+    pager->fd = -1;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -356,44 +356,46 @@ void pager_close(pager_t *pager)
  * pin_count가 증가되어 있으므로 사용 후 반드시 pager_unpin()을 호출해야 한다.
  * pin 해제를 잊으면 해당 프레임이 영원히 교체 불가 → 메모리 부족 발생.
  */
-uint8_t *pager_get_page(pager_t *pager, uint32_t page_id)
-{
-    int idx = find_frame(pager, page_id);
-    if (idx >= 0) {
-        /* 캐시 히트: pin++하고 LRU tick 갱신 */
-        pager->frames[idx].pin_count++;
-        pager->frames[idx].used_tick = ++pager->tick;
-        return pager->frames[idx].data;
-    }
-    /* 캐시 미스: 프레임 교체 후 디스크에서 읽기 */
-    idx = evict_frame(pager);
-    if (idx < 0) {
-        return NULL;
-    }
+uint8_t* pager_get_page(pager_t* pager, uint32_t page_id) {
+  pager->stats.page_loads++;
 
-    frame_t *f = &pager->frames[idx];
-    f->page_id = page_id;
-    f->is_valid = true;
-    f->is_dirty = false;
-    f->pin_count = 1;
-    f->used_tick = ++pager->tick;
-    memset(f->data, 0, pager->page_size);
-    pager_raw_read(pager, page_id, f->data);
-    return f->data;
+  int idx = find_frame(pager, page_id);
+  if (idx >= 0) {
+    /* 캐시 히트: pin++하고 LRU tick 갱신 */
+    pager->stats.cache_hits++;
+    pager->frames[idx].pin_count++;
+    pager->frames[idx].used_tick = ++pager->tick;
+    return pager->frames[idx].data;
+  }
+  /* 캐시 미스: 프레임 교체 후 디스크에서 읽기 */
+  pager->stats.cache_misses++;
+  idx = evict_frame(pager);
+  if (idx < 0) {
+    return NULL;
+  }
+
+  frame_t* f = &pager->frames[idx];
+  f->page_id = page_id;
+  f->is_valid = true;
+  f->is_dirty = false;
+  f->pin_count = 1;
+  f->used_tick = ++pager->tick;
+  memset(f->data, 0, pager->page_size);
+  pager_raw_read(pager, page_id, f->data);
+  return f->data;
 }
 
 /*
  * count_dirty - 현재 dirty 프레임 수를 센다.
  */
-static uint32_t count_dirty(pager_t *pager)
-{
-    uint32_t n = 0;
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        if (pager->frames[i].is_valid && pager->frames[i].is_dirty) {
-            n++;
-        }
+static uint32_t count_dirty(pager_t* pager) {
+  uint32_t n = 0;
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    if (pager->frames[i].is_valid && pager->frames[i].is_dirty) {
+      n++;
     }
-    return n;
+  }
+  return n;
 }
 
 /*
@@ -406,41 +408,41 @@ static uint32_t count_dirty(pager_t *pager)
  *   → 70 - 16 = 54개를 플러시해야 함
  *   → used_tick이 작은 순서대로 54개를 기록
  */
-static void pager_flush_dirty(pager_t *pager, uint32_t target_count)
-{
-    uint32_t dirty = count_dirty(pager);
-    uint32_t flushed = 0;
+static void pager_flush_dirty(pager_t* pager, uint32_t target_count) {
+  uint32_t dirty = count_dirty(pager);
+  uint32_t flushed = 0;
 
-    while (dirty > target_count) {
-        /* dirty + unpinned 중 가장 오래된 프레임 선택 */
-        int best = -1;
-        uint64_t min_tick = UINT64_MAX;
-        for (int i = 0; i < MAX_FRAMES; i++) {
-            frame_t *f = &pager->frames[i];
-            if (f->is_valid && f->is_dirty && f->pin_count == 0 &&
-                f->used_tick < min_tick) {
-                min_tick = f->used_tick;
-                best = i;
-            }
-        }
-        if (best < 0) break; /* 모든 dirty가 pinned → 포기 */
-
-        frame_t *f = &pager->frames[best];
-        pager_raw_write(pager, f->page_id, f->data);
-        if (pager->log_flushes) {
-            uint32_t ptype;
-            memcpy(&ptype, f->data, sizeof(uint32_t));
-            fprintf(stderr, "[pager] flush  page %u (%s, dirty→clean)\n",
-                    f->page_id, page_type_str(ptype));
-        }
-        f->is_dirty = false;
-        dirty--;
-        flushed++;
+  while (dirty > target_count) {
+    /* dirty + unpinned 중 가장 오래된 프레임 선택 */
+    int best = -1;
+    uint64_t min_tick = UINT64_MAX;
+    for (int i = 0; i < MAX_FRAMES; i++) {
+      frame_t* f = &pager->frames[i];
+      if (f->is_valid && f->is_dirty && f->pin_count == 0 &&
+          f->used_tick < min_tick) {
+        min_tick = f->used_tick;
+        best = i;
+      }
     }
+    if (best < 0) break; /* 모든 dirty가 pinned → 포기 */
 
-    if (flushed > 0 && pager->log_flushes) {
-        fprintf(stderr, "[pager] watermark flush: %u pages written\n", flushed);
+    frame_t* f = &pager->frames[best];
+    pager_raw_write(pager, f->page_id, f->data);
+    pager->stats.pages_flushed++;
+    if (pager->log_flushes) {
+      uint32_t ptype;
+      memcpy(&ptype, f->data, sizeof(uint32_t));
+      fprintf(stderr, "[pager] flush  page %u (%s, dirty→clean)\n", f->page_id,
+              page_type_str(ptype));
     }
+    f->is_dirty = false;
+    dirty--;
+    flushed++;
+  }
+
+  if (flushed > 0 && pager->log_flushes) {
+    fprintf(stderr, "[pager] watermark flush: %u pages written\n", flushed);
+  }
 }
 
 /*
@@ -453,19 +455,18 @@ static void pager_flush_dirty(pager_t *pager, uint32_t target_count)
  * dirty 프레임 수가 high_watermark 이상이면 자동으로 선제 플러시를 수행한다.
  * 예: high=64, low=16 → dirty가 64개 넘으면 16개까지 줄인다.
  */
-void pager_mark_dirty(pager_t *pager, uint32_t page_id)
-{
-    int idx = find_frame(pager, page_id);
-    if (idx >= 0) {
-        pager->frames[idx].is_dirty = true;
-    }
-    pager->header_dirty = true;
+void pager_mark_dirty(pager_t* pager, uint32_t page_id) {
+  int idx = find_frame(pager, page_id);
+  if (idx >= 0) {
+    pager->frames[idx].is_dirty = true;
+  }
+  pager->header_dirty = true;
 
-    /* 워터마크 체크: dirty가 너무 많으면 선제 플러시 */
-    if (pager->dirty_high_watermark > 0 &&
-        count_dirty(pager) >= pager->dirty_high_watermark) {
-        pager_flush_dirty(pager, pager->dirty_low_watermark);
-    }
+  /* 워터마크 체크: dirty가 너무 많으면 선제 플러시 */
+  if (pager->dirty_high_watermark > 0 &&
+      count_dirty(pager) >= pager->dirty_high_watermark) {
+    pager_flush_dirty(pager, pager->dirty_low_watermark);
+  }
 }
 
 /*
@@ -474,12 +475,11 @@ void pager_mark_dirty(pager_t *pager, uint32_t page_id)
  * pin_count가 0이 되면 LRU 교체 대상이 된다.
  * pager_get_page() 호출 횟수만큼 pager_unpin()을 호출해야 한다.
  */
-void pager_unpin(pager_t *pager, uint32_t page_id)
-{
-    int idx = find_frame(pager, page_id);
-    if (idx >= 0 && pager->frames[idx].pin_count > 0) {
-        pager->frames[idx].pin_count--;
-    }
+void pager_unpin(pager_t* pager, uint32_t page_id) {
+  int idx = find_frame(pager, page_id);
+  if (idx >= 0 && pager->frames[idx].pin_count > 0) {
+    pager->frames[idx].pin_count--;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -513,28 +513,27 @@ void pager_unpin(pager_t *pager, uint32_t page_id)
  *   → page 5를 반환
  *   → next_page_id = 6
  */
-uint32_t pager_alloc_page(pager_t *pager)
-{
-    /* 빈 페이지 재활용 */
-    if (pager->header.free_page_head != 0) {
-        uint32_t pid = pager->header.free_page_head;
-        uint8_t *page = pager_get_page(pager, pid);
-        free_page_header_t fph;
-        memcpy(&fph, page, sizeof(fph));
-        pager->header.free_page_head = fph.next_free_page;
-        /* 재활용할 페이지를 0으로 초기화 */
-        memset(page, 0, pager->page_size);
-        pager_mark_dirty(pager, pid);
-        pager_unpin(pager, pid);
-        return pid;
-    }
-    /* 새 페이지 할당: 파일 끝에 추가 */
-    uint32_t pid = pager->header.next_page_id++;
-    uint8_t *page = pager_get_page(pager, pid);
+uint32_t pager_alloc_page(pager_t* pager) {
+  /* 빈 페이지 재활용 */
+  if (pager->header.free_page_head != 0) {
+    uint32_t pid = pager->header.free_page_head;
+    uint8_t* page = pager_get_page(pager, pid);
+    free_page_header_t fph;
+    memcpy(&fph, page, sizeof(fph));
+    pager->header.free_page_head = fph.next_free_page;
+    /* 재활용할 페이지를 0으로 초기화 */
     memset(page, 0, pager->page_size);
     pager_mark_dirty(pager, pid);
     pager_unpin(pager, pid);
     return pid;
+  }
+  /* 새 페이지 할당: 파일 끝에 추가 */
+  uint32_t pid = pager->header.next_page_id++;
+  uint8_t* page = pager_get_page(pager, pid);
+  memset(page, 0, pager->page_size);
+  pager_mark_dirty(pager, pid);
+  pager_unpin(pager, pid);
+  return pid;
 }
 
 /*
@@ -552,18 +551,15 @@ uint32_t pager_alloc_page(pager_t *pager)
  *   → free_page_head = 7
  *   → 리스트: 7 → 12 → 0
  */
-void pager_free_page(pager_t *pager, uint32_t page_id)
-{
-    uint8_t *page = pager_get_page(pager, page_id);
-    free_page_header_t fph = {
-        .page_type = PAGE_TYPE_FREE,
-        .next_free_page = pager->header.free_page_head
-    };
-    memset(page, 0, pager->page_size);
-    memcpy(page, &fph, sizeof(fph));
-    pager_mark_dirty(pager, page_id);
-    pager_unpin(pager, page_id);
-    pager->header.free_page_head = page_id;
+void pager_free_page(pager_t* pager, uint32_t page_id) {
+  uint8_t* page = pager_get_page(pager, page_id);
+  free_page_header_t fph = {.page_type = PAGE_TYPE_FREE,
+                            .next_free_page = pager->header.free_page_head};
+  memset(page, 0, pager->page_size);
+  memcpy(page, &fph, sizeof(fph));
+  pager_mark_dirty(pager, page_id);
+  pager_unpin(pager, page_id);
+  pager->header.free_page_head = page_id;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -580,31 +576,44 @@ void pager_free_page(pager_t *pager, uint32_t page_id)
  *
  * pager_close() 내부에서 호출되며, 프로그램 종료 전 데이터 유실을 방지한다.
  */
-void pager_flush_all(pager_t *pager)
-{
-    /* dirty 프레임을 디스크에 기록 */
-    uint32_t flush_count = 0;
-    for (int i = 0; i < MAX_FRAMES; i++) {
-        if (pager->frames[i].is_valid && pager->frames[i].is_dirty) {
-            pager_raw_write(pager, pager->frames[i].page_id, pager->frames[i].data);
-            if (pager->log_flushes) {
-                uint32_t ptype;
-                memcpy(&ptype, pager->frames[i].data, sizeof(uint32_t));
-                fprintf(stderr, "[pager] flush  page %u (%s)\n",
-                        pager->frames[i].page_id, page_type_str(ptype));
-            }
-            pager->frames[i].is_dirty = false;
-            flush_count++;
-        }
+void pager_flush_all(pager_t* pager) {
+  /* dirty 프레임을 디스크에 기록 */
+  uint32_t flush_count = 0;
+  for (int i = 0; i < MAX_FRAMES; i++) {
+    if (pager->frames[i].is_valid && pager->frames[i].is_dirty) {
+      pager_raw_write(pager, pager->frames[i].page_id, pager->frames[i].data);
+      if (pager->log_flushes) {
+        uint32_t ptype;
+        memcpy(&ptype, pager->frames[i].data, sizeof(uint32_t));
+        fprintf(stderr, "[pager] flush  page %u (%s)\n",
+                pager->frames[i].page_id, page_type_str(ptype));
+      }
+      pager->frames[i].is_dirty = false;
+      flush_count++;
     }
-    if (pager->log_flushes && flush_count > 0) {
-        fprintf(stderr, "[pager] flush_all: %u pages written + header\n", flush_count);
-    }
-    /* DB 헤더(page 0) 기록 */
-    uint8_t *hbuf = (uint8_t *)calloc(1, pager->page_size);
-    memcpy(hbuf, &pager->header, sizeof(db_header_t));
-    pager_raw_write(pager, 0, hbuf);
-    free(hbuf);
-    fsync(pager->fd);
-    pager->header_dirty = false;
+  }
+  if (pager->log_flushes && flush_count > 0) {
+    fprintf(stderr, "[pager] flush_all: %u pages written + header\n",
+            flush_count);
+  }
+  /* DB 헤더(page 0) 기록 */
+  uint8_t* hbuf = (uint8_t*)calloc(1, pager->page_size);
+  memcpy(hbuf, &pager->header, sizeof(db_header_t));
+  pager_raw_write(pager, 0, hbuf);
+  free(hbuf);
+  fsync(pager->fd);
+  pager->header_dirty = false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  통계
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/*
+ * pager_reset_stats - 쿼리 통계를 0으로 초기화한다.
+ *
+ * 매 쿼리 실행 직전에 호출하여, 해당 쿼리의 I/O 패턴만 정확히 측정한다.
+ */
+void pager_reset_stats(pager_t* pager) {
+  memset(&pager->stats, 0, sizeof(query_stats_t));
 }
