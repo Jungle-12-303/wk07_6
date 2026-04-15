@@ -1,6 +1,26 @@
+/*
+ * schema.c — 행(row) 직렬화/역직렬화 및 스키마 레이아웃 계산
+ *
+ * 역할:
+ *   column_meta_t 배열을 기반으로 각 컬럼의 바이트 오프셋을 계산하고,
+ *   row_value_t ↔ uint8_t[] 변환을 수행한다.
+ *
+ * 행 바이트 레이아웃 예시 (id BIGINT, name VARCHAR(32), age INT):
+ *   [8바이트: id][32바이트: name][4바이트: age]  → row_size = 44
+ *
+ * 각 컬럼의 offset은 schema_compute_layout()에서 순서대로 누적 계산된다.
+ */
+
 #include "storage/schema.h"
 #include <string.h>
 
+/*
+ * 컬럼 레이아웃을 계산한다.
+ * 각 컬럼의 offset을 순서대로 누적하고, 전체 row_size를 헤더에 기록한다.
+ *
+ * 예: columns = [{size=8}, {size=32}, {size=4}]
+ *     → offsets = [0, 8, 40], row_size = 44
+ */
 uint16_t schema_compute_layout(db_header_t *hdr)
 {
     uint16_t offset = 0;
@@ -13,6 +33,14 @@ uint16_t schema_compute_layout(db_header_t *hdr)
     return offset;
 }
 
+/*
+ * row_value_t 배열을 바이트 버퍼로 직렬화한다.
+ *
+ * 각 컬럼 타입에 따라:
+ *   INT     → 4바이트 memcpy
+ *   BIGINT  → 8바이트 memcpy
+ *   VARCHAR → 문자열 복사 (size-1까지, 나머지는 0으로 채움)
+ */
 void row_serialize(const db_header_t *hdr, const row_value_t *values, uint8_t *buf)
 {
     memset(buf, 0, hdr->row_size);
@@ -36,6 +64,7 @@ void row_serialize(const db_header_t *hdr, const row_value_t *values, uint8_t *b
             }
             case COL_TYPE_VARCHAR:
             {
+                /* 최대 col->size - 1 바이트까지 복사 (null 종단 보장) */
                 size_t len = strlen(values[i].str_val);
                 if (len >= col->size)
                 {
@@ -48,6 +77,14 @@ void row_serialize(const db_header_t *hdr, const row_value_t *values, uint8_t *b
     }
 }
 
+/*
+ * 바이트 버퍼를 row_value_t 배열로 역직렬화한다.
+ *
+ * 각 컬럼 타입에 따라:
+ *   INT     → 4바이트 memcpy
+ *   BIGINT  → 8바이트 memcpy
+ *   VARCHAR → col->size만큼 복사 후 null 종단 추가
+ */
 void row_deserialize(const db_header_t *hdr, const uint8_t *buf, row_value_t *values)
 {
     memset(values, 0, sizeof(row_value_t) * hdr->column_count);
