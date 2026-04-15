@@ -8,11 +8,13 @@
 #include <string.h>
 #include <inttypes.h>
 
-static void cmd_btree(pager_t *pager) {
+static void cmd_btree(pager_t *pager)
+{
     bptree_print(pager);
 }
 
-static void cmd_pages(pager_t *pager) {
+static void cmd_pages(pager_t *pager)
+{
     db_header_t *hdr = &pager->header;
     uint32_t heap_count = 0, leaf_count = 0, internal_count = 0, free_count = 0;
     for (uint32_t i = 1; i < hdr->next_page_id; i++) {
@@ -46,14 +48,19 @@ static void cmd_pages(pager_t *pager) {
             pager_unpin(pager, fp);
             fp = fph.next_free_page;
             c++;
-            if (fp != 0) printf(" ->");
+            if (fp != 0) {
+                printf(" ->");
+            }
         }
-        if (fp != 0) printf(" ...");
+        if (fp != 0) {
+            printf(" ...");
+        }
         printf("\n");
     }
 }
 
-static void cmd_stats(pager_t *pager) {
+static void cmd_stats(pager_t *pager)
+{
     db_header_t *hdr = &pager->header;
     printf("Rows: %" PRIu64 " (live)\n", hdr->row_count);
     printf("Next ID: %" PRIu64 "\n", hdr->next_id);
@@ -69,16 +76,22 @@ static void cmd_stats(pager_t *pager) {
     printf("Free page head: %u\n", hdr->free_page_head);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     const char *db_path = "test.db";
-    if (argc > 1) db_path = argv[1];
+    if (argc > 1) {
+        db_path = argv[1];
+    }
 
     pager_t pager;
     bool create = true;
 
     /* check if file exists */
     FILE *f = fopen(db_path, "r");
-    if (f) { create = false; fclose(f); }
+    if (f != NULL) {
+        create = false;
+        fclose(f);
+    }
 
     if (pager_open(&pager, db_path, create) != 0) {
         fprintf(stderr, "Failed to open database: %s\n", db_path);
@@ -91,21 +104,37 @@ int main(int argc, char **argv) {
     while (1) {
         printf("minidb> ");
         fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) break;
+        if (!fgets(line, sizeof(line), stdin)) {
+            break;
+        }
 
         /* trim newline */
         size_t len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
             line[--len] = '\0';
+        }
 
-        if (len == 0) continue;
+        if (len == 0) {
+            continue;
+        }
 
         /* meta commands */
         if (line[0] == '.') {
-            if (strcmp(line, ".exit") == 0 || strcmp(line, ".quit") == 0) break;
-            if (strcmp(line, ".btree") == 0) { cmd_btree(&pager); continue; }
-            if (strcmp(line, ".pages") == 0) { cmd_pages(&pager); continue; }
-            if (strcmp(line, ".stats") == 0) { cmd_stats(&pager); continue; }
+            if (strcmp(line, ".exit") == 0 || strcmp(line, ".quit") == 0) {
+                break;
+            }
+            if (strcmp(line, ".btree") == 0) {
+                cmd_btree(&pager);
+                continue;
+            }
+            if (strcmp(line, ".pages") == 0) {
+                cmd_pages(&pager);
+                continue;
+            }
+            if (strcmp(line, ".stats") == 0) {
+                cmd_stats(&pager);
+                continue;
+            }
             printf("Unknown command: %s\n", line);
             continue;
         }
@@ -117,8 +146,9 @@ int main(int argc, char **argv) {
         }
 
         exec_result_t res = execute(&pager, &stmt);
-        if (res.message[0] != '\0')
+        if (res.message[0] != '\0') {
             printf("%s\n", res.message);
+        }
     }
 
     pager_close(&pager);

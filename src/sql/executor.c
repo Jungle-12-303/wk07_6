@@ -7,9 +7,12 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-static void print_row(const db_header_t *hdr, const row_value_t *values) {
+static void print_row(const db_header_t *hdr, const row_value_t *values)
+{
     for (uint16_t i = 0; i < hdr->column_count; i++) {
-        if (i > 0) printf(" | ");
+        if (i > 0) {
+            printf(" | ");
+        }
         const column_meta_t *col = &hdr->columns[i];
         switch (col->type) {
             case COL_TYPE_INT:
@@ -26,22 +29,30 @@ static void print_row(const db_header_t *hdr, const row_value_t *values) {
     printf("\n");
 }
 
-static void print_header(const db_header_t *hdr) {
+static void print_header(const db_header_t *hdr)
+{
     for (uint16_t i = 0; i < hdr->column_count; i++) {
-        if (i > 0) printf(" | ");
+        if (i > 0) {
+            printf(" | ");
+        }
         printf("%s", hdr->columns[i].name);
     }
     printf("\n");
     for (uint16_t i = 0; i < hdr->column_count; i++) {
-        if (i > 0) printf("-+-");
-        for (uint16_t j = 0; j < 10; j++) printf("-");
+        if (i > 0) {
+            printf("-+-");
+        }
+        for (uint16_t j = 0; j < 10; j++) {
+            printf("-");
+        }
     }
     printf("\n");
 }
 
 /* ── CREATE TABLE ── */
 
-static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
     db_header_t *hdr = &pager->header;
 
@@ -63,7 +74,9 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt) {
     for (uint16_t i = 0; i < stmt->col_count; i++) {
         column_def_t *cd = &stmt->col_defs[i];
         /* skip if user explicitly defined id */
-        if (strncmp(cd->name, "id", 32) == 0) continue;
+        if (strncmp(cd->name, "id", 32) == 0) {
+            continue;
+        }
 
         column_meta_t *col = &hdr->columns[hdr->column_count++];
         memset(col, 0, sizeof(*col));
@@ -84,7 +97,8 @@ static exec_result_t exec_create_table(pager_t *pager, statement_t *stmt) {
 
 /* ── INSERT ── */
 
-static exec_result_t exec_insert(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_insert(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
     db_header_t *hdr = &pager->header;
 
@@ -148,7 +162,8 @@ typedef struct {
     uint32_t count;
 } scan_ctx_t;
 
-static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx) {
+static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
+{
     (void)ref;
     scan_ctx_t *sc = (scan_ctx_t *)ctx;
     const db_header_t *hdr = &sc->pager->header;
@@ -172,30 +187,35 @@ static bool select_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx) {
                         match = (strcmp(values[i].str_val, sc->stmt->pred_value) == 0);
                         break;
                 }
-                if (!match) return true; /* continue scan */
+                if (match == false) {
+                    return true; /* continue scan */
+                }
                 break;
             }
         }
     }
 
-    if (sc->count == 0) print_header(hdr);
+    if (sc->count == 0) {
+        print_header(hdr);
+    }
     print_row(hdr, values);
     sc->count++;
     return true;
 }
 
-static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
     db_header_t *hdr = &pager->header;
 
     row_ref_t ref;
-    if (!bptree_search(pager, stmt->pred_id, &ref)) {
+    if (bptree_search(pager, stmt->pred_id, &ref) == false) {
         snprintf(res.message, sizeof(res.message), "No row found with id=%" PRIu64, stmt->pred_id);
         return res;
     }
 
     const uint8_t *row_data = heap_fetch(pager, ref, hdr->row_size);
-    if (!row_data) {
+    if (row_data == NULL) {
         res.status = -1;
         snprintf(res.message, sizeof(res.message), "Error: row fetch failed");
         return res;
@@ -211,7 +231,8 @@ static exec_result_t exec_index_lookup(pager_t *pager, statement_t *stmt) {
     return res;
 }
 
-static exec_result_t exec_table_scan(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_table_scan(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
     scan_ctx_t sc = { .pager = pager, .stmt = stmt, .count = 0 };
     heap_scan(pager, pager->header.row_size, select_scan_cb, &sc);
@@ -230,7 +251,8 @@ typedef struct {
     uint32_t ids_len;
 } delete_scan_ctx_t;
 
-static bool delete_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx) {
+static bool delete_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx)
+{
     (void)ref;
     delete_scan_ctx_t *dc = (delete_scan_ctx_t *)ctx;
     const db_header_t *hdr = &dc->pager->header;
@@ -268,11 +290,12 @@ static bool delete_scan_cb(const uint8_t *row_data, row_ref_t ref, void *ctx) {
     return true;
 }
 
-static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
 
     row_ref_t ref;
-    if (!bptree_search(pager, stmt->pred_id, &ref)) {
+    if (bptree_search(pager, stmt->pred_id, &ref) == false) {
         snprintf(res.message, sizeof(res.message), "No row found with id=%" PRIu64, stmt->pred_id);
         return res;
     }
@@ -286,7 +309,8 @@ static exec_result_t exec_index_delete(pager_t *pager, statement_t *stmt) {
     return res;
 }
 
-static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt)
+{
     exec_result_t res = {0, ""};
     delete_scan_ctx_t dc = {
         .pager = pager, .stmt = stmt, .count = 0,
@@ -313,7 +337,8 @@ static exec_result_t exec_delete_scan(pager_t *pager, statement_t *stmt) {
 
 /* ── EXPLAIN ── */
 
-static exec_result_t exec_explain(pager_t *pager, statement_t *stmt) {
+static exec_result_t exec_explain(pager_t *pager, statement_t *stmt)
+{
     (void)pager;
     exec_result_t res = {0, ""};
     plan_t plan = planner_create_plan(stmt);
@@ -337,7 +362,8 @@ static exec_result_t exec_explain(pager_t *pager, statement_t *stmt) {
 
 /* ── main dispatch ── */
 
-exec_result_t execute(pager_t *pager, statement_t *stmt) {
+exec_result_t execute(pager_t *pager, statement_t *stmt)
+{
     if (stmt->type == STMT_EXPLAIN) {
         return exec_explain(pager, stmt);
     }
@@ -352,8 +378,9 @@ exec_result_t execute(pager_t *pager, statement_t *stmt) {
         case ACCESS_PATH_INDEX_LOOKUP:
             return exec_index_lookup(pager, stmt);
         case ACCESS_PATH_TABLE_SCAN:
-            if (stmt->type == STMT_DELETE)
+            if (stmt->type == STMT_DELETE) {
                 return exec_delete_scan(pager, stmt);
+            }
             return exec_table_scan(pager, stmt);
         case ACCESS_PATH_INDEX_DELETE:
             return exec_index_delete(pager, stmt);

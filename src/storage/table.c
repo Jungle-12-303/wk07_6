@@ -13,19 +13,25 @@
  * i.e., next row starts at: page_size - free_space_offset - row_size
  */
 
-static uint16_t slots_end(uint16_t slot_count) {
+static uint16_t slots_end(uint16_t slot_count)
+{
     return (uint16_t)(sizeof(heap_page_header_t) + slot_count * sizeof(slot_t));
 }
 
-static uint16_t available_space(pager_t *pager, heap_page_header_t *hph) {
+static uint16_t available_space(pager_t *pager, heap_page_header_t *hph)
+{
     uint16_t front = slots_end(hph->slot_count);
     uint16_t back  = (uint16_t)(pager->page_size - hph->free_space_offset);
-    if (back <= front) return 0;
+    if (back <= front)
+    {
+        return 0;
+    }
     return back - front;
 }
 
 /* Find a heap page with a free slot or enough space. Returns page_id. */
-static uint32_t find_heap_page(pager_t *pager, uint16_t row_size) {
+static uint32_t find_heap_page(pager_t *pager, uint16_t row_size)
+{
     uint32_t pid = pager->header.first_heap_page_id;
     while (pid != 0) {
         uint8_t *page = pager_get_page(pager, pid);
@@ -34,18 +40,25 @@ static uint32_t find_heap_page(pager_t *pager, uint16_t row_size) {
         pager_unpin(pager, pid);
 
         /* has free slot? */
-        if (hph.free_slot_head != SLOT_NONE) return pid;
+        if (hph.free_slot_head != SLOT_NONE)
+        {
+            return pid;
+        }
 
         /* enough space for new slot + row? */
         uint16_t need = (uint16_t)(sizeof(slot_t) + row_size);
-        if (available_space(pager, &hph) >= need) return pid;
+        if (available_space(pager, &hph) >= need)
+        {
+            return pid;
+        }
 
         pid = hph.next_heap_page_id;
     }
     return 0; /* none found */
 }
 
-row_ref_t heap_insert(pager_t *pager, const uint8_t *row_data, uint16_t row_size) {
+row_ref_t heap_insert(pager_t *pager, const uint8_t *row_data, uint16_t row_size)
+{
     row_ref_t ref = {0, 0};
     uint32_t pid = find_heap_page(pager, row_size);
 
@@ -135,10 +148,14 @@ row_ref_t heap_insert(pager_t *pager, const uint8_t *row_data, uint16_t row_size
     return ref;
 }
 
-const uint8_t *heap_fetch(pager_t *pager, row_ref_t ref, uint16_t row_size) {
+const uint8_t *heap_fetch(pager_t *pager, row_ref_t ref, uint16_t row_size)
+{
     (void)row_size;
     uint8_t *page = pager_get_page(pager, ref.page_id);
-    if (!page) return NULL;
+    if (page == NULL)
+    {
+        return NULL;
+    }
 
     slot_t slot;
     size_t slot_off = sizeof(heap_page_header_t) + ref.slot_id * sizeof(slot_t);
@@ -153,9 +170,13 @@ const uint8_t *heap_fetch(pager_t *pager, row_ref_t ref, uint16_t row_size) {
     return page + slot.offset;
 }
 
-int heap_delete(pager_t *pager, row_ref_t ref) {
+int heap_delete(pager_t *pager, row_ref_t ref)
+{
     uint8_t *page = pager_get_page(pager, ref.page_id);
-    if (!page) return -1;
+    if (page == NULL)
+    {
+        return -1;
+    }
 
     heap_page_header_t hph;
     memcpy(&hph, page, sizeof(hph));
@@ -180,7 +201,8 @@ int heap_delete(pager_t *pager, row_ref_t ref) {
     return 0;
 }
 
-void heap_scan(pager_t *pager, uint16_t row_size, scan_cb cb, void *ctx) {
+void heap_scan(pager_t *pager, uint16_t row_size, scan_cb cb, void *ctx)
+{
     (void)row_size;
     uint32_t pid = pager->header.first_heap_page_id;
     while (pid != 0) {

@@ -7,28 +7,35 @@
 
 /* ── helpers ── */
 
-static ssize_t pager_raw_read(pager_t *p, uint32_t page_id, uint8_t *buf) {
+static ssize_t pager_raw_read(pager_t *p, uint32_t page_id, uint8_t *buf)
+{
     off_t off = (off_t)page_id * p->page_size;
     return pread(p->fd, buf, p->page_size, off);
 }
 
-static ssize_t pager_raw_write(pager_t *p, uint32_t page_id, const uint8_t *buf) {
+static ssize_t pager_raw_write(pager_t *p, uint32_t page_id, const uint8_t *buf)
+{
     off_t off = (off_t)page_id * p->page_size;
     return pwrite(p->fd, buf, p->page_size, off);
 }
 
-static int find_frame(pager_t *p, uint32_t page_id) {
+static int find_frame(pager_t *p, uint32_t page_id)
+{
     for (int i = 0; i < MAX_FRAMES; i++) {
-        if (p->frames[i].is_valid && p->frames[i].page_id == page_id)
+        if (p->frames[i].is_valid && p->frames[i].page_id == page_id) {
             return i;
+        }
     }
     return -1;
 }
 
-static int evict_frame(pager_t *p) {
+static int evict_frame(pager_t *p)
+{
     /* find free frame first */
     for (int i = 0; i < MAX_FRAMES; i++) {
-        if (!p->frames[i].is_valid) return i;
+        if (!p->frames[i].is_valid) {
+            return i;
+        }
     }
     /* LRU among unpinned */
     int best = -1;
@@ -54,23 +61,31 @@ static int evict_frame(pager_t *p) {
 
 /* ── lifecycle ── */
 
-int pager_open(pager_t *pager, const char *path, bool create) {
+int pager_open(pager_t *pager, const char *path, bool create)
+{
     memset(pager, 0, sizeof(*pager));
 
     uint32_t ps = (uint32_t)sysconf(_SC_PAGESIZE);
     if (ps == 0 || ps == (uint32_t)-1) ps = 4096;
 
     int flags = O_RDWR;
-    if (create) flags |= O_CREAT | O_TRUNC;
+    if (create) {
+        flags |= O_CREAT | O_TRUNC;
+    }
     int fd = open(path, flags, 0644);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        return -1;
+    }
 
     pager->fd = fd;
 
     /* allocate frame buffers */
     for (int i = 0; i < MAX_FRAMES; i++) {
         pager->frames[i].data = (uint8_t *)calloc(1, ps);
-        if (!pager->frames[i].data) { close(fd); return -1; }
+        if (pager->frames[i].data == NULL) {
+            close(fd);
+            return -1;
+        }
     }
 
     if (create) {
@@ -124,14 +139,15 @@ int pager_open(pager_t *pager, const char *path, bool create) {
     } else {
         /* read existing header */
         /* first read with a temp buffer to get page_size */
+        uint32_t initial_ps = ps;
         uint8_t tmp[4096];
         pread(fd, tmp, sizeof(tmp), 0);
         db_header_t *th = (db_header_t *)tmp;
         pager->page_size = th->page_size;
         ps = pager->page_size;
 
-        /* re-alloc frames if page_size differs */
-        if (ps != 4096) {
+        /* re-alloc frames if page_size differs from initial allocation */
+        if (ps != initial_ps) {
             for (int i = 0; i < MAX_FRAMES; i++) {
                 free(pager->frames[i].data);
                 pager->frames[i].data = (uint8_t *)calloc(1, ps);
@@ -152,18 +168,23 @@ int pager_open(pager_t *pager, const char *path, bool create) {
     return 0;
 }
 
-void pager_close(pager_t *pager) {
+void pager_close(pager_t *pager)
+{
     pager_flush_all(pager);
     for (int i = 0; i < MAX_FRAMES; i++) {
         free(pager->frames[i].data);
         pager->frames[i].data = NULL;
     }
-    if (pager->fd >= 0) { close(pager->fd); pager->fd = -1; }
+    if (pager->fd >= 0) {
+        close(pager->fd);
+        pager->fd = -1;
+    }
 }
 
 /* ── cached page access ── */
 
-uint8_t *pager_get_page(pager_t *pager, uint32_t page_id) {
+uint8_t *pager_get_page(pager_t *pager, uint32_t page_id)
+{
     int idx = find_frame(pager, page_id);
     if (idx >= 0) {
         pager->frames[idx].pin_count++;
@@ -184,21 +205,27 @@ uint8_t *pager_get_page(pager_t *pager, uint32_t page_id) {
     return f->data;
 }
 
-void pager_mark_dirty(pager_t *pager, uint32_t page_id) {
+void pager_mark_dirty(pager_t *pager, uint32_t page_id)
+{
     int idx = find_frame(pager, page_id);
-    if (idx >= 0) pager->frames[idx].is_dirty = true;
+    if (idx >= 0) {
+        pager->frames[idx].is_dirty = true;
+    }
     pager->header_dirty = true;
 }
 
-void pager_unpin(pager_t *pager, uint32_t page_id) {
+void pager_unpin(pager_t *pager, uint32_t page_id)
+{
     int idx = find_frame(pager, page_id);
-    if (idx >= 0 && pager->frames[idx].pin_count > 0)
+    if (idx >= 0 && pager->frames[idx].pin_count > 0) {
         pager->frames[idx].pin_count--;
+    }
 }
 
 /* ── allocation ── */
 
-uint32_t pager_alloc_page(pager_t *pager) {
+uint32_t pager_alloc_page(pager_t *pager)
+{
     if (pager->header.free_page_head != 0) {
         uint32_t pid = pager->header.free_page_head;
         uint8_t *page = pager_get_page(pager, pid);
@@ -220,7 +247,8 @@ uint32_t pager_alloc_page(pager_t *pager) {
     return pid;
 }
 
-void pager_free_page(pager_t *pager, uint32_t page_id) {
+void pager_free_page(pager_t *pager, uint32_t page_id)
+{
     uint8_t *page = pager_get_page(pager, page_id);
     free_page_header_t fph = {
         .page_type = PAGE_TYPE_FREE,
@@ -235,7 +263,8 @@ void pager_free_page(pager_t *pager, uint32_t page_id) {
 
 /* ── flush ── */
 
-void pager_flush_all(pager_t *pager) {
+void pager_flush_all(pager_t *pager)
+{
     for (int i = 0; i < MAX_FRAMES; i++) {
         if (pager->frames[i].is_valid && pager->frames[i].is_dirty) {
             pager_raw_write(pager, pager->frames[i].page_id, pager->frames[i].data);

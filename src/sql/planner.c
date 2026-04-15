@@ -1,6 +1,7 @@
 #include "sql/planner.h"
 
-plan_t planner_create_plan(const statement_t *stmt) {
+plan_t planner_create_plan(const statement_t *stmt)
+{
     plan_t plan;
 
     switch (stmt->type) {
@@ -34,7 +35,8 @@ plan_t planner_create_plan(const statement_t *stmt) {
     return plan;
 }
 
-const char *access_path_name(access_path_t ap) {
+const char *access_path_name(access_path_t ap)
+{
     switch (ap) {
         case ACCESS_PATH_TABLE_SCAN:    return "TABLE_SCAN";
         case ACCESS_PATH_INDEX_LOOKUP:  return "INDEX_LOOKUP";

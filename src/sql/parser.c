@@ -4,40 +4,54 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-static void trim(char *s) {
+static void trim(char *s)
+{
     /* trim trailing whitespace and semicolons */
     size_t len = strlen(s);
-    while (len > 0 && (isspace((unsigned char)s[len-1]) || s[len-1] == ';'))
+    while (len > 0 && (isspace((unsigned char)s[len-1]) || s[len-1] == ';')) {
         s[--len] = '\0';
+    }
 }
 
-static int strcasecmp_n(const char *a, const char *b, size_t n) {
+static int strcasecmp_n(const char *a, const char *b, size_t n)
+{
     for (size_t i = 0; i < n; i++) {
         int d = tolower((unsigned char)a[i]) - tolower((unsigned char)b[i]);
-        if (d != 0) return d;
-        if (a[i] == '\0') return 0;
+        if (d != 0) {
+            return d;
+        }
+        if (a[i] == '\0') {
+            return 0;
+        }
     }
     return 0;
 }
 
-static const char *skip_ws(const char *p) {
-    while (*p && isspace((unsigned char)*p)) p++;
+static const char *skip_ws(const char *p)
+{
+    while (*p && isspace((unsigned char)*p)) {
+        p++;
+    }
     return p;
 }
 
-static int parse_create_table(const char *input, statement_t *stmt) {
+static int parse_create_table(const char *input, statement_t *stmt)
+{
     /* CREATE TABLE <name> (col1 TYPE, col2 TYPE(N), ...) */
     const char *p = skip_ws(input);
     /* extract table name */
     char tname[32] = {0};
     int i = 0;
-    while (*p && !isspace((unsigned char)*p) && *p != '(' && i < 31)
+    while (*p && !isspace((unsigned char)*p) && *p != '(' && i < 31) {
         tname[i++] = *p++;
+    }
     tname[i] = '\0';
     strncpy(stmt->table_name, tname, 31);
 
     p = skip_ws(p);
-    if (*p != '(') return -1;
+    if (*p != '(') {
+        return -1;
+    }
     p++; /* skip ( */
 
     stmt->col_count = 0;
@@ -47,14 +61,17 @@ static int parse_create_table(const char *input, statement_t *stmt) {
 
     while (*p && *p != ')') {
         p = skip_ws(p);
-        if (*p == ')') break;
+        if (*p == ')') {
+            break;
+        }
 
         /* column name */
         column_def_t *cd = &stmt->col_defs[stmt->col_count];
         memset(cd, 0, sizeof(*cd));
         i = 0;
-        while (*p && !isspace((unsigned char)*p) && *p != ',' && *p != ')' && i < 31)
+        while (*p && !isspace((unsigned char)*p) && *p != ',' && *p != ')' && i < 31) {
             cd->name[i++] = *p++;
+        }
         cd->name[i] = '\0';
 
         p = skip_ws(p);
@@ -62,8 +79,9 @@ static int parse_create_table(const char *input, statement_t *stmt) {
         /* type */
         char type_str[32] = {0};
         i = 0;
-        while (*p && *p != ',' && *p != ')' && *p != '(' && !isspace((unsigned char)*p) && i < 31)
+        while (*p && *p != ',' && *p != ')' && *p != '(' && !isspace((unsigned char)*p) && i < 31) {
             type_str[i++] = *p++;
+        }
         type_str[i] = '\0';
 
         if (strcasecmp_n(type_str, "INT", 3) == 0 && strlen(type_str) == 3) {
@@ -79,8 +97,12 @@ static int parse_create_table(const char *input, statement_t *stmt) {
             if (*p == '(') {
                 p++;
                 cd->size = (uint16_t)atoi(p);
-                while (*p && *p != ')') p++;
-                if (*p == ')') p++;
+                while (*p && *p != ')') {
+                    p++;
+                }
+                if (*p == ')') {
+                    p++;
+                }
             }
         } else {
             return -1;
@@ -88,86 +110,114 @@ static int parse_create_table(const char *input, statement_t *stmt) {
 
         stmt->col_count++;
         p = skip_ws(p);
-        if (*p == ',') p++;
+        if (*p == ',') {
+            p++;
+        }
     }
 
     return 0;
 }
 
-static int parse_insert(const char *input, statement_t *stmt) {
+static int parse_insert(const char *input, statement_t *stmt)
+{
     /* INSERT INTO <table> VALUES (v1, v2, ...) */
     const char *p = skip_ws(input);
-    if (strcasecmp_n(p, "INTO", 4) != 0) return -1;
+    if (strcasecmp_n(p, "INTO", 4) != 0) {
+        return -1;
+    }
     p = skip_ws(p + 4);
 
     int i = 0;
-    while (*p && !isspace((unsigned char)*p) && i < 31)
+    while (*p && !isspace((unsigned char)*p) && i < 31) {
         stmt->table_name[i++] = *p++;
+    }
     stmt->table_name[i] = '\0';
 
     p = skip_ws(p);
-    if (strcasecmp_n(p, "VALUES", 6) != 0) return -1;
+    if (strcasecmp_n(p, "VALUES", 6) != 0) {
+        return -1;
+    }
     p = skip_ws(p + 6);
 
-    if (*p != '(') return -1;
+    if (*p != '(') {
+        return -1;
+    }
     p++;
 
     stmt->insert_value_count = 0;
     while (*p && *p != ')') {
         p = skip_ws(p);
-        if (*p == ')') break;
+        if (*p == ')') {
+            break;
+        }
 
         char *val = stmt->insert_values[stmt->insert_value_count];
         i = 0;
         if (*p == '\'') {
             p++; /* skip opening quote */
-            while (*p && *p != '\'' && i < 255)
+            while (*p && *p != '\'' && i < 255) {
                 val[i++] = *p++;
-            if (*p == '\'') p++;
+            }
+            if (*p == '\'') {
+                p++;
+            }
         } else {
-            while (*p && *p != ',' && *p != ')' && !isspace((unsigned char)*p) && i < 255)
+            while (*p && *p != ',' && *p != ')' && !isspace((unsigned char)*p) && i < 255) {
                 val[i++] = *p++;
+            }
         }
         val[i] = '\0';
         stmt->insert_value_count++;
 
         p = skip_ws(p);
-        if (*p == ',') p++;
+        if (*p == ',') {
+            p++;
+        }
     }
 
     return 0;
 }
 
-static int parse_where(const char *p, statement_t *stmt) {
+static int parse_where(const char *p, statement_t *stmt)
+{
     p = skip_ws(p);
     if (*p == '\0' || *p == ';') {
         stmt->predicate_kind = PREDICATE_NONE;
         return 0;
     }
 
-    if (strcasecmp_n(p, "WHERE", 5) != 0) return -1;
+    if (strcasecmp_n(p, "WHERE", 5) != 0) {
+        return -1;
+    }
     p = skip_ws(p + 5);
 
     /* field name */
     int i = 0;
-    while (*p && *p != '=' && !isspace((unsigned char)*p) && i < 31)
+    while (*p && *p != '=' && !isspace((unsigned char)*p) && i < 31) {
         stmt->pred_field[i++] = *p++;
+    }
     stmt->pred_field[i] = '\0';
 
     p = skip_ws(p);
-    if (*p != '=') return -1;
+    if (*p != '=') {
+        return -1;
+    }
     p = skip_ws(p + 1);
 
     /* value */
     i = 0;
     if (*p == '\'') {
         p++;
-        while (*p && *p != '\'' && i < 255)
+        while (*p && *p != '\'' && i < 255) {
             stmt->pred_value[i++] = *p++;
-        if (*p == '\'') p++;
+        }
+        if (*p == '\'') {
+            p++;
+        }
     } else {
-        while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 255)
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 255) {
             stmt->pred_value[i++] = *p++;
+        }
     }
     stmt->pred_value[i] = '\0';
 
@@ -180,37 +230,46 @@ static int parse_where(const char *p, statement_t *stmt) {
     return 0;
 }
 
-static int parse_select(const char *input, statement_t *stmt) {
+static int parse_select(const char *input, statement_t *stmt)
+{
     const char *p = skip_ws(input);
     if (*p == '*') {
         stmt->select_all = true;
         p = skip_ws(p + 1);
     }
-    if (strcasecmp_n(p, "FROM", 4) != 0) return -1;
+    if (strcasecmp_n(p, "FROM", 4) != 0) {
+        return -1;
+    }
     p = skip_ws(p + 4);
 
     int i = 0;
-    while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 31)
+    while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 31) {
         stmt->table_name[i++] = *p++;
+    }
     stmt->table_name[i] = '\0';
 
     return parse_where(skip_ws(p), stmt);
 }
 
-static int parse_delete(const char *input, statement_t *stmt) {
+static int parse_delete(const char *input, statement_t *stmt)
+{
     const char *p = skip_ws(input);
-    if (strcasecmp_n(p, "FROM", 4) != 0) return -1;
+    if (strcasecmp_n(p, "FROM", 4) != 0) {
+        return -1;
+    }
     p = skip_ws(p + 4);
 
     int i = 0;
-    while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 31)
+    while (*p && !isspace((unsigned char)*p) && *p != ';' && i < 31) {
         stmt->table_name[i++] = *p++;
+    }
     stmt->table_name[i] = '\0';
 
     return parse_where(skip_ws(p), stmt);
 }
 
-int parse(const char *input, statement_t *stmt) {
+int parse(const char *input, statement_t *stmt)
+{
     memset(stmt, 0, sizeof(*stmt));
 
     char buf[1024];
@@ -219,11 +278,15 @@ int parse(const char *input, statement_t *stmt) {
     trim(buf);
 
     const char *p = skip_ws(buf);
-    if (*p == '\0') return -1;
+    if (*p == '\0') {
+        return -1;
+    }
 
     if (strcasecmp_n(p, "CREATE", 6) == 0) {
         p = skip_ws(p + 6);
-        if (strcasecmp_n(p, "TABLE", 5) != 0) return -1;
+        if (strcasecmp_n(p, "TABLE", 5) != 0) {
+            return -1;
+        }
         stmt->type = STMT_CREATE_TABLE;
         return parse_create_table(skip_ws(p + 5), stmt);
     }
@@ -244,7 +307,9 @@ int parse(const char *input, statement_t *stmt) {
         /* parse the inner statement */
         p = skip_ws(p + 7);
         statement_t inner;
-        if (parse(p, &inner) != 0) return -1;
+        if (parse(p, &inner) != 0) {
+            return -1;
+        }
         stmt->inner_type = inner.type;
         stmt->inner_predicate = inner.predicate_kind;
         memcpy(stmt->table_name, inner.table_name, 32);

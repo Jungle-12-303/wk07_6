@@ -5,60 +5,87 @@
 
 /* ── helpers ── */
 
-static uint32_t max_leaf_keys(pager_t *p) {
+static uint32_t max_leaf_keys(pager_t *p)
+{
     return (p->page_size - sizeof(leaf_page_header_t)) / sizeof(leaf_entry_t);
 }
 
-static uint32_t max_internal_keys(pager_t *p) {
+static uint32_t max_internal_keys(pager_t *p)
+{
     return (p->page_size - sizeof(internal_page_header_t)) / sizeof(internal_entry_t);
 }
 
-static uint32_t min_leaf_keys(pager_t *p) { return max_leaf_keys(p) / 2; }
-static uint32_t min_internal_keys(pager_t *p) { return max_internal_keys(p) / 2; }
+static uint32_t min_leaf_keys(pager_t *p)
+{
+    return max_leaf_keys(p) / 2;
+}
 
-static leaf_entry_t *leaf_entries(uint8_t *page) {
+static uint32_t min_internal_keys(pager_t *p)
+{
+    return max_internal_keys(p) / 2;
+}
+
+static leaf_entry_t *leaf_entries(uint8_t *page)
+{
     return (leaf_entry_t *)(page + sizeof(leaf_page_header_t));
 }
-static internal_entry_t *internal_entries(uint8_t *page) {
+
+static internal_entry_t *internal_entries(uint8_t *page)
+{
     return (internal_entry_t *)(page + sizeof(internal_page_header_t));
 }
 
-static uint32_t root_id(pager_t *p) { return p->header.root_index_page_id; }
+static uint32_t root_id(pager_t *p)
+{
+    return p->header.root_index_page_id;
+}
 
 /* binary search in leaf: returns index where key should be (or is) */
-static uint32_t leaf_find(leaf_entry_t *entries, uint32_t count, uint64_t key) {
+static uint32_t leaf_find(leaf_entry_t *entries, uint32_t count, uint64_t key)
+{
     uint32_t lo = 0, hi = count;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;
-        if (entries[mid].key < key) lo = mid + 1;
-        else hi = mid;
+        if (entries[mid].key < key) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
     }
     return lo;
 }
 
 /* binary search in internal: returns child index */
-static uint32_t internal_find(internal_entry_t *entries, uint32_t count, uint64_t key) {
+static uint32_t internal_find(internal_entry_t *entries, uint32_t count, uint64_t key)
+{
     uint32_t lo = 0, hi = count;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;
-        if (entries[mid].key <= key) lo = mid + 1;
-        else hi = mid;
+        if (entries[mid].key <= key) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
     }
     return lo;
 }
 
 /* Get child page_id from internal node for a given key */
-static uint32_t internal_child_for_key(uint8_t *page, uint64_t key) {
+static uint32_t internal_child_for_key(uint8_t *page, uint64_t key)
+{
     internal_page_header_t iph;
     memcpy(&iph, page, sizeof(iph));
     internal_entry_t *entries = internal_entries(page);
     uint32_t idx = internal_find(entries, iph.key_count, key);
-    if (idx == 0) return iph.leftmost_child_page_id;
+    if (idx == 0) {
+        return iph.leftmost_child_page_id;
+    }
     return entries[idx - 1].right_child_page_id;
 }
 
 /* Find the leaf page_id containing key */
-static uint32_t find_leaf(pager_t *pager, uint64_t key) {
+static uint32_t find_leaf(pager_t *pager, uint64_t key)
+{
     uint32_t pid = root_id(pager);
     while (1) {
         uint8_t *page = pager_get_page(pager, pid);
@@ -76,7 +103,8 @@ static uint32_t find_leaf(pager_t *pager, uint64_t key) {
 
 /* ── search ── */
 
-bool bptree_search(pager_t *pager, uint64_t key, row_ref_t *out_ref) {
+bool bptree_search(pager_t *pager, uint64_t key, row_ref_t *out_ref)
+{
     uint32_t leaf_pid = find_leaf(pager, key);
     uint8_t *page = pager_get_page(pager, leaf_pid);
     leaf_page_header_t lph;
@@ -98,19 +126,22 @@ bool bptree_search(pager_t *pager, uint64_t key, row_ref_t *out_ref) {
 static void insert_into_parent(pager_t *pager, uint32_t left_pid, uint64_t key, uint32_t right_pid);
 
 static void leaf_insert_entry(uint8_t *page, leaf_page_header_t *lph,
-                              uint64_t key, row_ref_t ref) {
+                              uint64_t key, row_ref_t ref)
+{
     leaf_entry_t *entries = leaf_entries(page);
     uint32_t idx = leaf_find(entries, lph->key_count, key);
     /* shift right */
-    for (uint32_t i = lph->key_count; i > idx; i--)
+    for (uint32_t i = lph->key_count; i > idx; i--) {
         entries[i] = entries[i - 1];
+    }
     entries[idx].key = key;
     entries[idx].row_ref = ref;
     lph->key_count++;
     memcpy(page, lph, sizeof(*lph));
 }
 
-static void split_leaf(pager_t *pager, uint32_t leaf_pid, uint64_t key, row_ref_t ref) {
+static void split_leaf(pager_t *pager, uint32_t leaf_pid, uint64_t key, row_ref_t ref)
+{
     uint8_t *page = pager_get_page(pager, leaf_pid);
     leaf_page_header_t lph;
     memcpy(&lph, page, sizeof(lph));
@@ -175,7 +206,8 @@ static void split_leaf(pager_t *pager, uint32_t leaf_pid, uint64_t key, row_ref_
     insert_into_parent(pager, leaf_pid, promote_key, new_pid);
 }
 
-static void split_internal(pager_t *pager, uint32_t node_pid, uint64_t key, uint32_t right_child) {
+static void split_internal(pager_t *pager, uint32_t node_pid, uint64_t key, uint32_t right_child)
+{
     uint8_t *page = pager_get_page(pager, node_pid);
     internal_page_header_t iph;
     memcpy(&iph, page, sizeof(iph));
@@ -215,8 +247,6 @@ static void split_internal(pager_t *pager, uint32_t node_pid, uint64_t key, uint
     {
         /* leftmost child of new node */
         uint8_t *cp = pager_get_page(pager, new_iph.leftmost_child_page_id);
-        uint32_t ct;
-        memcpy(&ct, cp, sizeof(uint32_t));
         /* parent_page_id is at offset 4 for both leaf and internal headers */
         uint32_t pp = new_pid;
         memcpy(cp + 4, &pp, sizeof(uint32_t));
@@ -246,7 +276,8 @@ static void split_internal(pager_t *pager, uint32_t node_pid, uint64_t key, uint
     insert_into_parent(pager, node_pid, promote_key, new_pid);
 }
 
-static void insert_into_parent(pager_t *pager, uint32_t left_pid, uint64_t key, uint32_t right_pid) {
+static void insert_into_parent(pager_t *pager, uint32_t left_pid, uint64_t key, uint32_t right_pid)
+{
     /* get left's parent */
     uint8_t *left_page = pager_get_page(pager, left_pid);
     uint32_t parent_pid;
@@ -294,8 +325,9 @@ static void insert_into_parent(pager_t *pager, uint32_t left_pid, uint64_t key, 
     if (iph.key_count < max_internal_keys(pager)) {
         internal_entry_t *entries = internal_entries(pp);
         uint32_t idx = internal_find(entries, iph.key_count, key);
-        for (uint32_t i = iph.key_count; i > idx; i--)
+        for (uint32_t i = iph.key_count; i > idx; i--) {
             entries[i] = entries[i - 1];
+        }
         entries[idx].key = key;
         entries[idx].right_child_page_id = right_pid;
         iph.key_count++;
@@ -320,7 +352,8 @@ static void insert_into_parent(pager_t *pager, uint32_t left_pid, uint64_t key, 
     }
 }
 
-int bptree_insert(pager_t *pager, uint64_t key, row_ref_t ref) {
+int bptree_insert(pager_t *pager, uint64_t key, row_ref_t ref)
+{
     uint32_t leaf_pid = find_leaf(pager, key);
     uint8_t *page = pager_get_page(pager, leaf_pid);
     leaf_page_header_t lph;
@@ -348,32 +381,41 @@ int bptree_insert(pager_t *pager, uint64_t key, row_ref_t ref) {
 
 /* ── delete ── */
 
-static void delete_entry_from_leaf(uint8_t *page, leaf_page_header_t *lph, uint32_t idx) {
+static void delete_entry_from_leaf(uint8_t *page, leaf_page_header_t *lph, uint32_t idx)
+{
     leaf_entry_t *entries = leaf_entries(page);
-    for (uint32_t i = idx; i < lph->key_count - 1; i++)
+    for (uint32_t i = idx; i < lph->key_count - 1; i++) {
         entries[i] = entries[i + 1];
+    }
     lph->key_count--;
     memcpy(page, lph, sizeof(*lph));
 }
 
-static void delete_entry_from_internal(uint8_t *page, internal_page_header_t *iph, uint32_t idx) {
+static void delete_entry_from_internal(uint8_t *page, internal_page_header_t *iph, uint32_t idx)
+{
     internal_entry_t *entries = internal_entries(page);
-    for (uint32_t i = idx; i < iph->key_count - 1; i++)
+    for (uint32_t i = idx; i < iph->key_count - 1; i++) {
         entries[i] = entries[i + 1];
+    }
     iph->key_count--;
     memcpy(page, iph, sizeof(*iph));
 }
 
 static void fix_internal_after_delete(pager_t *pager, uint32_t node_pid);
 
-static void fix_leaf_after_delete(pager_t *pager, uint32_t leaf_pid) {
+static void fix_leaf_after_delete(pager_t *pager, uint32_t leaf_pid)
+{
     uint8_t *page = pager_get_page(pager, leaf_pid);
     leaf_page_header_t lph;
     memcpy(&lph, page, sizeof(lph));
     pager_unpin(pager, leaf_pid);
 
-    if (leaf_pid == root_id(pager)) return; /* root can be underfull */
-    if (lph.key_count >= min_leaf_keys(pager)) return;
+    if (leaf_pid == root_id(pager)) {
+        return; /* root can be underfull */
+    }
+    if (lph.key_count >= min_leaf_keys(pager)) {
+        return;
+    }
 
     uint32_t parent_pid = lph.parent_page_id;
     uint8_t *pp = pager_get_page(pager, parent_pid);
@@ -394,7 +436,9 @@ static void fix_leaf_after_delete(pager_t *pager, uint32_t leaf_pid) {
         }
     }
     pager_unpin(pager, parent_pid);
-    if (child_idx < 0) return;
+    if (child_idx < 0) {
+        return;
+    }
 
     /* try borrow from right sibling */
     if (child_idx <= (int)iph.key_count - 1 || (child_idx == 0 && iph.key_count > 0)) {
@@ -500,8 +544,11 @@ try_left:
     if (child_idx > 0) {
         uint32_t lsib_pid;
         uint32_t sep_idx = (uint32_t)(child_idx - 1);
-        if (child_idx == 1) lsib_pid = iph.leftmost_child_page_id;
-        else lsib_pid = pentries[child_idx - 2].right_child_page_id;
+        if (child_idx == 1) {
+            lsib_pid = iph.leftmost_child_page_id;
+        } else {
+            lsib_pid = pentries[child_idx - 2].right_child_page_id;
+        }
 
         /* merge current into left */
         uint8_t *lpage = pager_get_page(pager, lsib_pid);
@@ -513,8 +560,9 @@ try_left:
         leaf_entry_t *cur_entries = leaf_entries(page);
         leaf_entry_t *left_entries = leaf_entries(lpage);
 
-        for (uint32_t i = 0; i < lph.key_count; i++)
+        for (uint32_t i = 0; i < lph.key_count; i++) {
             left_entries[llph.key_count + i] = cur_entries[i];
+        }
         llph.key_count += lph.key_count;
         llph.next_leaf_page_id = lph.next_leaf_page_id;
         memcpy(lpage, &llph, sizeof(llph));
@@ -557,8 +605,9 @@ try_left:
         memcpy(&rlph, rpage, sizeof(rlph));
         leaf_entry_t *rentries = leaf_entries(rpage);
 
-        for (uint32_t i = 0; i < rlph.key_count; i++)
+        for (uint32_t i = 0; i < rlph.key_count; i++) {
             cur_entries[lph.key_count + i] = rentries[i];
+        }
         lph.key_count += rlph.key_count;
         lph.next_leaf_page_id = rlph.next_leaf_page_id;
         memcpy(page, &lph, sizeof(lph));
@@ -589,7 +638,8 @@ try_left:
     }
 }
 
-static void fix_internal_after_delete(pager_t *pager, uint32_t node_pid) {
+static void fix_internal_after_delete(pager_t *pager, uint32_t node_pid)
+{
     if (node_pid == root_id(pager)) {
         /* root shrink: if root has 0 keys, promote its only child */
         uint8_t *page = pager_get_page(pager, node_pid);
@@ -617,14 +667,17 @@ static void fix_internal_after_delete(pager_t *pager, uint32_t node_pid) {
     memcpy(&iph, page, sizeof(iph));
     pager_unpin(pager, node_pid);
 
-    if (iph.key_count >= min_internal_keys(pager)) return;
+    if (iph.key_count >= min_internal_keys(pager)) {
+        return;
+    }
 
     /* simplified: for minimal implementation, we skip internal borrow/merge
        as it's rare and complex. The tree stays valid but may be slightly underfull. */
     /* A full implementation would borrow/merge internal nodes here. */
 }
 
-int bptree_delete(pager_t *pager, uint64_t key) {
+int bptree_delete(pager_t *pager, uint64_t key)
+{
     uint32_t leaf_pid = find_leaf(pager, key);
     uint8_t *page = pager_get_page(pager, leaf_pid);
     leaf_page_header_t lph;
@@ -647,30 +700,39 @@ int bptree_delete(pager_t *pager, uint64_t key) {
 
 /* ── debug ── */
 
-static void print_node(pager_t *pager, uint32_t pid, int depth) {
+static void print_node(pager_t *pager, uint32_t pid, int depth)
+{
     uint8_t *page = pager_get_page(pager, pid);
     uint32_t ptype;
     memcpy(&ptype, page, sizeof(uint32_t));
 
-    for (int i = 0; i < depth; i++) printf("  ");
+    for (int i = 0; i < depth; i++) {
+        printf("  ");
+    }
 
     if (ptype == PAGE_TYPE_LEAF) {
         leaf_page_header_t lph;
         memcpy(&lph, page, sizeof(lph));
         leaf_entry_t *entries = leaf_entries(page);
         printf("[LEAF page=%u] keys=%u:", pid, lph.key_count);
-        for (uint32_t i = 0; i < lph.key_count && i < 5; i++)
+        for (uint32_t i = 0; i < lph.key_count && i < 5; i++) {
             printf(" %lu", (unsigned long)entries[i].key);
-        if (lph.key_count > 5) printf(" ...");
+        }
+        if (lph.key_count > 5) {
+            printf(" ...");
+        }
         printf("\n");
     } else if (ptype == PAGE_TYPE_INTERNAL) {
         internal_page_header_t iph;
         memcpy(&iph, page, sizeof(iph));
         internal_entry_t *entries = internal_entries(page);
         printf("[INTERNAL page=%u] keys=%u:", pid, iph.key_count);
-        for (uint32_t i = 0; i < iph.key_count && i < 5; i++)
+        for (uint32_t i = 0; i < iph.key_count && i < 5; i++) {
             printf(" %lu", (unsigned long)entries[i].key);
-        if (iph.key_count > 5) printf(" ...");
+        }
+        if (iph.key_count > 5) {
+            printf(" ...");
+        }
         printf("\n");
         pager_unpin(pager, pid);
 
@@ -680,20 +742,23 @@ static void print_node(pager_t *pager, uint32_t pid, int depth) {
         entries = internal_entries(page);
 
         print_node(pager, iph.leftmost_child_page_id, depth + 1);
-        for (uint32_t i = 0; i < iph.key_count; i++)
+        for (uint32_t i = 0; i < iph.key_count; i++) {
             print_node(pager, entries[i].right_child_page_id, depth + 1);
+        }
         pager_unpin(pager, pid);
         return;
     }
     pager_unpin(pager, pid);
 }
 
-void bptree_print(pager_t *pager) {
+void bptree_print(pager_t *pager)
+{
     printf("B+ Tree (root: page %u)\n", root_id(pager));
     print_node(pager, root_id(pager), 1);
 }
 
-int bptree_height(pager_t *pager) {
+int bptree_height(pager_t *pager)
+{
     int h = 0;
     uint32_t pid = root_id(pager);
     while (1) {
