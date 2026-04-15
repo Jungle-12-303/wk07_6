@@ -91,6 +91,27 @@ static uint16_t available_space(pager_t *pager, heap_page_header_t *hph)
  */
 static uint32_t find_heap_page(pager_t *pager, uint16_t row_size)
 {
+    /*
+     * 순차 INSERT 최적화:
+     * 대부분의 append workload에서는 마지막 힙 페이지만 보면 충분하다.
+     * 마지막 페이지가 가득 찼을 때만 free slot 탐색을 위해 전체 체인을 본다.
+     */
+    if (pager->last_heap_page_id != 0) {
+        uint8_t *tail_page = pager_get_page(pager, pager->last_heap_page_id);
+        heap_page_header_t tail_hph;
+        memcpy(&tail_hph, tail_page, sizeof(tail_hph));
+        pager_unpin(pager, pager->last_heap_page_id);
+
+        if (tail_hph.free_slot_head != SLOT_NONE) {
+            return pager->last_heap_page_id;
+        }
+
+        uint16_t need = (uint16_t)(sizeof(slot_t) + row_size);
+        if (available_space(pager, &tail_hph) >= need) {
+            return pager->last_heap_page_id;
+        }
+    }
+
     uint32_t pid = pager->header.first_heap_page_id;
     while (pid != 0) {
         uint8_t *page = pager_get_page(pager, pid);
@@ -100,13 +121,6 @@ static uint32_t find_heap_page(pager_t *pager, uint16_t row_size)
 
         /* 재활용 가능한 빈 슬롯이 있는지 확인 */
         if (hph.free_slot_head != SLOT_NONE)
-        {
-            return pid;
-        }
-
-        /* 새 슬롯 + 행 데이터를 위한 공간이 충분한지 확인 */
-        uint16_t need = (uint16_t)(sizeof(slot_t) + row_size);
-        if (available_space(pager, &hph) >= need)
         {
             return pid;
         }
@@ -168,20 +182,10 @@ row_ref_t heap_insert(pager_t *pager, const uint8_t *row_data, uint16_t row_size
         pager_unpin(pager, pid);
 
         /*
-         * 힙 체인의 마지막 페이지를 찾아 새 페이지를 연결한다.
-         * 체인: first_heap(=1) → ... → prev_pid → 0
-         * → prev_pid.next_heap_page_id = pid (새 페이지)
+         * pager가 마지막 힙 페이지를 메모리에 캐시하므로
+         * 매번 체인 전체를 순회하지 않고 tail에 바로 연결한다.
          */
-        uint32_t cur = pager->header.first_heap_page_id;
-        uint32_t prev_pid = 0;
-        while (cur != 0) {
-            uint8_t *cp = pager_get_page(pager, cur);
-            heap_page_header_t ch;
-            memcpy(&ch, cp, sizeof(ch));
-            pager_unpin(pager, cur);
-            if (ch.next_heap_page_id == 0) { prev_pid = cur; break; }
-            cur = ch.next_heap_page_id;
-        }
+        uint32_t prev_pid = pager->last_heap_page_id;
         if (prev_pid != 0) {
             uint8_t *pp = pager_get_page(pager, prev_pid);
             heap_page_header_t ph;
@@ -191,6 +195,7 @@ row_ref_t heap_insert(pager_t *pager, const uint8_t *row_data, uint16_t row_size
             pager_mark_dirty(pager, prev_pid);
             pager_unpin(pager, prev_pid);
         }
+        pager->last_heap_page_id = pid;
     }
 
     /* 선택된 페이지에 행 삽입 */

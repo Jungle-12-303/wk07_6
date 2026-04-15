@@ -221,6 +221,7 @@ int pager_open(pager_t* pager, const char* path, bool create) {
   /* DB 파일 최초 생성 */
   if (create) {
     pager->page_size = ps;
+    pager->last_heap_page_id = 1;
 
     /* DB 헤더 초기화 */
     db_header_t* h = &pager->header;
@@ -306,6 +307,23 @@ int pager_open(pager_t* pager, const char* path, bool create) {
       fprintf(stderr, "pager: 유효하지 않은 매직 넘버입니다\n");
       close(fd);
       return -1;
+    }
+
+    /*
+     * 마지막 힙 페이지를 한 번만 복원해 두면,
+     * 이후 순차 INSERT에서 매번 힙 체인 전체를 스캔하지 않아도 된다.
+     */
+    pager->last_heap_page_id = pager->header.first_heap_page_id;
+    if (pager->last_heap_page_id != 0) {
+      uint32_t pid = pager->last_heap_page_id;
+      while (pid != 0) {
+        uint8_t* page = pager_get_page(pager, pid);
+        heap_page_header_t hph;
+        memcpy(&hph, page, sizeof(hph));
+        pager_unpin(pager, pid);
+        pager->last_heap_page_id = pid;
+        pid = hph.next_heap_page_id;
+      }
     }
   }
   return 0;

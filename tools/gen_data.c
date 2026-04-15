@@ -6,8 +6,8 @@
  *   SQL 파싱 없이 직접 삽입하므로, 100만 건도 빠르게 생성할 수 있다.
  *
  * 스키마:
- *   CREATE TABLE users (name VARCHAR(32), age INT)
- *   → id(BIGINT 8B) + name(VARCHAR 32B) + age(INT 4B) = 44바이트/행
+ *   CREATE TABLE users (name VARCHAR(32), email VARCHAR(32), age INT)
+ *   → id(BIGINT 8B) + name(VARCHAR 32B) + email(VARCHAR 32B) + age(INT 4B) = 76바이트/행
  *
  * 사용법:
  *   ./build/gen_data <db파일> <행수>
@@ -50,8 +50,8 @@ static const char *LAST_NAMES[] = {
 /* ── 스키마 초기화 ── */
 
 /*
- * init_schema - CREATE TABLE users (name VARCHAR(32), age INT)에 해당하는
- *               스키마를 헤더에 직접 설정한다.
+ * init_schema - CREATE TABLE users (name VARCHAR(32), email VARCHAR(32), age INT)에
+ *               해당하는 스키마를 헤더에 직접 설정한다.
  */
 static void init_schema(db_header_t *hdr)
 {
@@ -73,7 +73,15 @@ static void init_schema(db_header_t *hdr)
     name_col->size = 32;
     name_col->is_system = 0;
 
-    /* columns[2]: age INT */
+    /* columns[2]: email VARCHAR(32) — 유니크 값 (user{id}@test.com) */
+    column_meta_t *email_col = &hdr->columns[hdr->column_count++];
+    memset(email_col, 0, sizeof(*email_col));
+    strncpy(email_col->name, "email", 31);
+    email_col->type = COL_TYPE_VARCHAR;
+    email_col->size = 32;
+    email_col->is_system = 0;
+
+    /* columns[3]: age INT */
     column_meta_t *age_col = &hdr->columns[hdr->column_count++];
     memset(age_col, 0, sizeof(*age_col));
     strncpy(age_col->name, "age", 31);
@@ -88,6 +96,8 @@ static void init_schema(db_header_t *hdr)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     if (argc < 3) {
         fprintf(stderr, "사용법: %s <db파일> <행수>\n", argv[0]);
         fprintf(stderr, "  예: %s sql.db 1000000\n", argv[0]);
@@ -125,13 +135,14 @@ int main(int argc, char **argv)
     fprintf(stderr, "=== minidb 데이터 생성기 ===\n");
     fprintf(stderr, "DB: %s | 행 수: %" PRIu64 " | row_size: %u\n",
             db_path, total, hdr->row_size);
-    fprintf(stderr, "스키마: id(BIGINT) + name(VARCHAR 32) + age(INT)\n\n");
+    fprintf(stderr, "스키마: id(BIGINT) + name(VARCHAR 32) + email(VARCHAR 32) + age(INT)\n\n");
 
     struct timespec ts_start, ts_now;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-    uint64_t report_interval = 100000; /* 10만 건마다 보고 */
-    if (total < 100000) {
+    /* 100만 건에서도 초반부터 진행 상황이 보이도록 1% 단위로 보고 */
+    uint64_t report_interval = total / 100;
+    if (report_interval < 1000) {
         report_interval = total / 5;
         if (report_interval == 0) report_interval = 1;
     }
@@ -149,8 +160,11 @@ int main(int argc, char **argv)
         const char *last  = LAST_NAMES[rand() % LAST_COUNT];
         snprintf(values[1].str_val, 32, "%s %s", first, last);
 
+        /* email: user{id}@test.com (유니크) */
+        snprintf(values[2].str_val, 32, "user%" PRIu64 "@test.com", id);
+
         /* age: 18~80 랜덤 */
-        values[2].int_val = 18 + (rand() % 63);
+        values[3].int_val = 18 + (rand() % 63);
 
         /* 직렬화 → 힙 삽입 → B+ tree 등록 */
         row_serialize(hdr, values, row_buf);
