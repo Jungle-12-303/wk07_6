@@ -2,7 +2,7 @@
 
 `mmap`은 파일이나 익명 메모리를 프로세스의 가상 주소 공간에 **매핑**하는 시스템 콜이다. `read`·`write`와 달리 커널-유저 사이의 데이터 복사가 없고, 프로세스는 매핑된 주소를 보통의 메모리처럼 접근한다. `mmap`의 의미는 두 축—**file-backed vs anonymous**와 **shared vs private**—의 네 가지 조합에 의해 결정된다.
 
-## mmap의 서명
+## mmap의 시그니처
 
 ```c
 void *mmap(void *addr, size_t length,
@@ -17,7 +17,7 @@ void *mmap(void *addr, size_t length,
 
 이 호출은 내부적으로 현재 프로세스의 `mm_struct`에 새 VMA 하나를 추가한다. 실제 페이지 테이블은 비어 있는 상태로 놓이고, 접근 시 페이지 폴트를 통해 페이지가 채워진다.
 
-## 두 축
+## 파일/익명, 공유/비공개 두 축
 
 ### File-backed vs Anonymous
 
@@ -44,7 +44,7 @@ void *mmap(void *addr, size_t length,
    파일에는 반영되지 않는다.
 ```
 
-## 네 가지 조합
+## 네 가지 매핑 조합
 
 | 조합 | 주 용도 | 쓰기 시 동작 |
 | --- | --- | --- |
@@ -53,50 +53,50 @@ void *mmap(void *addr, size_t length,
 | **Anonymous + Private** (`MAP_ANONYMOUS \| MAP_PRIVATE`) | `malloc`의 큰 할당 / 스레드 스택 | 일반 쓰기, 프로세스 전용 |
 | **Anonymous + Shared** (`MAP_ANONYMOUS \| MAP_SHARED`) | 부모·자식 간 공유 메모리 | 공유된 모든 프로세스에 즉시 반영 |
 
-## 조합별 그림
+## 조합별 동작 구조
 
 ```mermaid
 flowchart LR
-    subgraph FS["File-backed + Shared"]
-        F1[Process A] --> PT1[PTE]
-        F2[Process B] --> PT2[PTE]
-        PT1 --> FR[Shared Frame]
+    subgraph FS["파일 매핑 + 공유"]
+        F1[프로세스 A] --> PT1[PTE]
+        F2[프로세스 B] --> PT2[PTE]
+        PT1 --> FR[공유 프레임]
         PT2 --> FR
-        FR --> DISK[File on Disk]
+        FR --> DISK[디스크 파일]
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph FP["File-backed + Private"]
-        G1[Process A] --> Q1[PTE: W=0 최초]
-        G2[Process B] --> Q2[PTE: W=0 최초]
-        Q1 --> FRP[Shared Frame]
+    subgraph FP["파일 매핑 + 비공개"]
+        G1[프로세스 A] --> Q1[PTE: W=0 초기]
+        G2[프로세스 B] --> Q2[PTE: W=0 초기]
+        Q1 --> FRP[공유 프레임]
         Q2 --> FRP
-        FRP --> DISK2[File on Disk]
-        Q1 -. write 시 COW .-> NEW1[A 전용 사본]
+        FRP --> DISK2[디스크 파일]
+        Q1 -. 쓰기 시 COW .-> NEW1[A 전용 사본]
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph AP["Anonymous + Private"]
-        H1[Process] --> PT3[PTE]
-        PT3 --> FR2[전용 프레임 0-fill]
+    subgraph AP["익명 메모리 + 비공개"]
+        H1[프로세스] --> PT3[PTE]
+        PT3 --> FR2[전용 프레임 0으로 채움]
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph AS["Anonymous + Shared"]
-        I1[Parent] --> PT4[PTE]
-        I2[Child] --> PT5[PTE]
+    subgraph AS["익명 메모리 + 공유"]
+        I1[부모] --> PT4[PTE]
+        I2[자식] --> PT5[PTE]
         PT4 --> FR3[공유 프레임]
         PT5 --> FR3
     end
 ```
 
-## 각 조합의 실제 쓰임
+## 조합별 실제 사용 사례
 
 ### File-backed + Private — 실행 파일 로딩의 기반
 

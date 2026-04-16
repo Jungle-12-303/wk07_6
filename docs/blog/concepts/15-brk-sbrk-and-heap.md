@@ -2,7 +2,7 @@
 
 프로세스의 **힙(Heap)** 은 동적 할당을 위한 영역이지만, 커널에게 힙이라는 자료구조 자체가 있는 것은 아니다. 커널은 단지 데이터 영역 바로 위에 있는 한 경계—**program break** 라 불리는 주소—의 값을 유지할 뿐이다. 이 값을 위로 밀면 힙이 커지고, 아래로 당기면 줄어든다. 그 값을 움직이는 시스템 콜이 **`brk`** 와 **`sbrk`** 다.
 
-## 힙의 정체
+## 힙이란 무엇인가
 
 힙은 BSS 바로 위 가상 주소에서 시작해 **`mm_struct->start_brk`** 부터 **`mm_struct->brk`** 까지 이어지는 단일 VMA다. 이 VMA의 권한은 `rw-` 이고, `vm_file`은 `NULL`(익명 매핑)이다.
 
@@ -21,7 +21,7 @@
 
 `brk`가 `start_brk`와 같은 상태에서는 힙의 크기가 0이다. `brk`를 위로 밀면 그 만큼 힙 VMA의 크기가 늘어나고, 새로 생긴 가상 주소가 프로세스에 쓸 수 있게 된다.
 
-## brk와 sbrk의 서명
+## brk와 sbrk의 시그니처
 
 ```c
 int   brk(void *addr);        // break를 addr로 설정
@@ -33,24 +33,24 @@ void *sbrk(intptr_t incr);    // break를 incr만큼 이동, 이전 값 반환
 
 이 두 호출은 커널 내부에서 본질적으로 **`mm_struct->brk`를 움직이는 연산** 이다. 경계가 위로 움직이면 힙 VMA가 확장되고, 아래로 움직이면 축소된다. 확장된 페이지들은 요구 페이징으로 처리된다—즉 VMA만 커질 뿐, 실제 물리 프레임은 처음 접근 시 0-채움 프레임이 배정된다.
 
-## 확장의 흐름
+## 힙 확장 과정
 
 ```mermaid
 sequenceDiagram
     participant App
     participant Libc as glibc malloc
     participant K as Kernel
-    participant PT as Page Table
+    participant PT as 페이지 테이블
     App->>Libc: malloc(1KB)
-    Libc->>K: brk(cur_break + 4KB)
-    K->>K: heap VMA 끝을 +4KB 확장
+    Libc->>K: brk(현재_break + 4KB)
+    K->>K: 힙 VMA 끝을 +4KB 확장
     K-->>Libc: 성공
     Libc-->>App: payload 포인터 반환
     App->>App: *p = 1; (첫 접근)
-    App->>PT: VA 접근 → PTE.P=0
+    App->>PT: 가상 주소 접근 → PTE.P=0
     PT->>K: Page Fault
-    K->>K: 0-채움 프레임 할당, PTE 갱신
-    K-->>App: 재실행 (쓰기 성공)
+    K->>K: 0으로 채운 프레임 할당, PTE 업데이트
+    K-->>App: 명령 재실행 (쓰기 성공)
 ```
 
 `brk`로 받은 메모리는 **커널 입장에서는 4 KB 단위로 늘어나는 VMA 영역**이고, 글로벌 `malloc` 입장에서는 **자신이 관리할 전체 풀**이다. `malloc`은 한 번 `brk`로 큰 덩어리를 받아 내부 자료구조로 쪼개 관리한다.
@@ -81,7 +81,7 @@ sequenceDiagram
 
 그래서 glibc의 `malloc`은 **큰 할당(기본 128 KB 이상)** 에 대해서는 `brk` 대신 **anonymous private `mmap`** 을 사용한다. `mmap`으로 받은 영역은 개별 VMA이므로 `free` 시점에 `munmap`으로 통째로 반환할 수 있다. 힙 단편화의 상단 문제를 우회하는 방법이다.
 
-## sbrk(0)로 break 엿보기
+## sbrk(0)로 break 위치 확인
 
 ```c
 #include <unistd.h>

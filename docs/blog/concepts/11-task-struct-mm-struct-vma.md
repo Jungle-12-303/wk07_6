@@ -86,27 +86,27 @@ struct vm_area_struct {
 
 커널은 이 VMA들을 **이중 연결 리스트**(주소 순) 와 **레드-블랙 트리**(주소 기반 빠른 검색) 두 가지 방식으로 동시에 관리한다. 페이지 폴트가 일어나면 커널은 폴트 주소를 키로 레드-블랙 트리를 탐색해 "이 주소가 속한 VMA"를 찾아내고, VMA에 기록된 권한과 매핑 정보를 바탕으로 처리 전략을 결정한다.
 
-## 셋의 관계
+## task_struct, mm_struct, VMA의 관계
 
 ```mermaid
 flowchart LR
     TS[task_struct] -->|mm| MM[mm_struct]
     TS2[task_struct] -->|mm| MM
     TS3[task_struct] -->|mm| MM
-    MM -->|mmap 리스트 / RB tree| V1[VMA: text]
-    MM --> V2[VMA: data]
-    MM --> V3[VMA: heap]
-    MM --> V4[VMA: libc text]
-    MM --> V5[VMA: libc data]
-    MM --> V6[VMA: stack]
-    MM -->|pgd| PT[Page Table 루트]
+    MM -->|mmap 리스트 / RB tree| V1[VMA: 코드]
+    MM --> V2[VMA: 데이터]
+    MM --> V3[VMA: 힙]
+    MM --> V4[VMA: libc 코드]
+    MM --> V5[VMA: libc 데이터]
+    MM --> V6[VMA: 스택]
+    MM -->|pgd| PT[페이지 테이블 루트]
     PT --> PTE1[PTE: page 단위 매핑]
     PT --> PTE2[...]
 ```
 
 같은 `mm_struct`를 여러 `task_struct`(= 스레드)가 공유하고, 한 `mm_struct` 아래에 여러 VMA가 달려 있으며, 실제 번역을 위한 페이지 테이블이 `mm_struct->pgd`로 연결된다. VMA는 "어떻게 매핑해야 하는가의 설계도"이고, 페이지 테이블은 "지금 실제로 매핑된 결과"다.
 
-## 시스템 콜이 하는 일은 대부분 이 구조 수정
+## 시스템 콜과 자료구조 수정
 
 유저가 메모리에 관한 시스템 콜을 호출할 때, 커널이 실제로 하는 일은 이 세 구조체를 고치는 작업이다.
 

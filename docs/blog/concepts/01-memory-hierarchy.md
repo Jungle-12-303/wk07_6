@@ -32,13 +32,13 @@ CPU는 한 사이클에 모든 메모리에 접근할 수 없다. 더 빠른 메
 
 ```mermaid
 flowchart LR
-    CPU[CPU Core] -->|0 cycle| R[Registers]
-    R -->|~4 cycle| L1[L1 Cache]
-    L1 -->|~12 cycle| L2[L2 Cache]
-    L2 -->|~40 cycle| L3[L3 Cache]
-    L3 -->|~200 cycle| DRAM[DRAM]
-    DRAM -->|~수십 μs| SSD[SSD/NVMe]
-    SSD -->|~수 ms| HDD[HDD]
+    CPU["CPU 코어"] -->|0 cycle| R["레지스터"]
+    R -->|~4 cycle| L1["L1 캐시"]
+    L1 -->|~12 cycle| L2["L2 캐시"]
+    L2 -->|~40 cycle| L3["L3 캐시"]
+    L3 -->|~200 cycle| DRAM["DRAM"]
+    DRAM -->|~수십 μs| SSD["SSD/NVMe"]
+    SSD -->|~수 ms| HDD["HDD"]
 ```
 
 각 층은 바로 아래 층의 **캐시** 역할을 한다. L1은 L2의 캐시, L2는 L3의 캐시, L3는 DRAM의 캐시, DRAM은 디스크의 캐시다. 이 관계는 재귀적이다. 한 층에서 찾지 못하면 다음 층으로 내려간다.
@@ -70,21 +70,21 @@ flowchart LR
 
 이 단위의 차이가 성능을 지배한다. "한 바이트만 읽어도 실제로는 64바이트가 움직인다"거나 "한 바이트만 고쳐도 실제로는 4 KB가 디스크에서 읽히고 다시 4 KB가 기록된다"는 사실은 코드를 작성하는 순간엔 보이지 않지만, 물리적으로는 매 접근마다 일어난다.
 
-## 계층이 강요하는 프로그래밍 원칙
+## 프로그래밍에 미치는 영향
 
 계층이 존재하는 한, 성능을 결정하는 것은 **접근 패턴**이다.
 
 ```mermaid
 flowchart TD
-    A[CPU가 주소 X를 요청] --> B{L1 hit?}
-    B -- yes --> Z[4 cycle에 완료]
-    B -- no --> C{L2 hit?}
-    C -- yes --> Y[~12 cycle]
-    C -- no --> D{L3 hit?}
-    D -- yes --> X[~40 cycle]
-    D -- no --> E{DRAM hit?}
-    E -- yes --> W[~200 cycle]
-    E -- no --> F[디스크에서 페이지 로드<br/>~수 ms]
+    A["CPU가 주소 X를 요청"] --> B{"L1 hit?"}
+    B -- "예" --> Z["4 cycle에 완료"]
+    B -- "아니오" --> C{"L2 hit?"}
+    C -- "예" --> Y["~12 cycle"]
+    C -- "아니오" --> D{"L3 hit?"}
+    D -- "예" --> X["~40 cycle"]
+    D -- "아니오" --> E{"DRAM hit?"}
+    E -- "예" --> W["~200 cycle"]
+    E -- "아니오" --> F["디스크에서 페이지 로드<br/>~수 ms"]
 ```
 
 한 번의 L1 hit과 한 번의 페이지 폴트는 대략 **10^6 배**의 성능 차이가 난다. 그래서 다음 두 원리가 성립한다.
